@@ -1,5 +1,5 @@
 use sylvia::cw_schema::write_api;
-use water_well_donation::contract::sv::{ContractExecMsg, ContractQueryMsg, InstantiateMsg};
+use water_well_initiative::contract::sv::{ContractExecMsg, ContractQueryMsg, InstantiateMsg};
 
 fn main() {
     write_api! {

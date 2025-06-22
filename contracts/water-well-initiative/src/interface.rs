@@ -4,7 +4,7 @@
 // use sylvia::interface;
 
 // #[interface]
-// pub trait WaterWellDonationInterface {
+// pub trait WaterWellInitiativeInterface {
 //     type Error: From<StdError>;
 //     type ExecC: CustomMsg + CustomQuery;
 //     type QueryC: CustomQuery + CustomMsg;

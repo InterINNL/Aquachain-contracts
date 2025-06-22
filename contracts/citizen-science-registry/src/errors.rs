@@ -24,8 +24,17 @@ pub enum ContractError {
     #[error("Data is not valid json")]
     InvalidJson,
 
-    #[error("Not enought funds")]
+    #[error("Not enough funds")]
     InvalidFunds,
+
+    #[error("Sensor is already activated")]
+    AlreadyActivated,
+
+    #[error("Sensor is not active")]
+    SensorInactive,
+
+    #[error("Verifier already exists")]
+    VerifierAlreadyExists,
 }
 
 impl From<ContractError> for StdError {

@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "contracts/water-well-donation",
+  "contracts/water-well-initiative",
   "contracts/citizen-science-registry",
 ]
 resolver = "3"

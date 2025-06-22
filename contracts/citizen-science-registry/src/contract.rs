@@ -1,31 +1,37 @@
+use crate::constants::{
+    ADMIN, DATA_ENTRIES, DATA_HASHES, DEFAULT_DENOM, DENOM, NEXT_ENTRY_ID, NEXT_SENSOR_ID, SENSORS,
+    VERIFIERS,
+};
+use crate::enums::SensorStatus;
 use crate::errors::ContractError;
 use cosmwasm_schema::cw_serde;
-use cw_storage_plus::{Bound, Item, Map};
+use cw_storage_plus::Bound;
 use hex;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sylvia::contract;
 use sylvia::ctx::{ExecCtx, InstantiateCtx, QueryCtx};
-use sylvia::cw_std::{Addr, BankMsg, Coin, Order, Response, StdResult, Uint128};
+use sylvia::cw_std::{Addr, BankMsg, Coin, Order, Response, StdResult};
 use sylvia::entry_points;
+
+#[cw_serde]
+pub struct Sensor {
+    pub id: u64,
+    pub owner: Addr,
+    pub data_str: String,
+    pub status: SensorStatus,
+}
 
 #[cw_serde]
 pub struct DataEntry {
     pub id: u64,
+    pub sensor_id: u64,
     pub submitter: Addr,
     pub data_str: String,
     pub verified: bool,
     pub verifier: Option<Addr>,
     pub rewarded: bool,
 }
-
-pub const OWNER: Item<Addr> = Item::new("owner");
-pub const NEXT_ID: Item<u64> = Item::new("next_id");
-pub const DATA_ENTRIES: Map<u64, DataEntry> = Map::new("data_entries");
-pub const DATA_HASHES: Map<String, bool> = Map::new("data_hashes");
-pub const VERIFIERS: Map<Addr, bool> = Map::new("verifiers");
-
-pub const REWARD_AMOUNT: u128 = 1000000;
-pub const ATOM: &str = "ustake";
 
 pub struct CitizenScienceRegistry;
 
@@ -38,19 +44,107 @@ impl CitizenScienceRegistry {
     }
 
     #[sv::msg(instantiate)]
-    fn instantiate(&self, ctx: InstantiateCtx) -> StdResult<Response> {
-        NEXT_ID.save(ctx.deps.storage, &1)?;
-        OWNER.save(ctx.deps.storage, &ctx.info.sender)?;
-        Ok(Response::new().add_attribute("method", "instantiate"))
+    fn instantiate(&self, ctx: InstantiateCtx, denom: Option<String>) -> StdResult<Response> {
+        ADMIN.save(ctx.deps.storage, &ctx.info.sender)?;
+        NEXT_SENSOR_ID.save(ctx.deps.storage, &1)?;
+        NEXT_ENTRY_ID.save(ctx.deps.storage, &1)?;
+
+        let denom_to_store = denom.unwrap_or_else(|| DEFAULT_DENOM.to_string());
+        DENOM.save(ctx.deps.storage, &denom_to_store)?;
+
+        Ok(Response::new()
+            .add_attribute("method", "instantiate")
+            .add_attribute("denom", denom_to_store))
     }
 
-    /// Add a verifier address (only callable by contract owner)
     #[sv::msg(exec)]
-    fn add_verifier(&self, ctx: ExecCtx, verifier: Addr) -> StdResult<Response> {
-        let owner = OWNER.load(ctx.deps.storage)?;
-        if ctx.info.sender != owner {
+    fn submit_sensor(&self, ctx: ExecCtx, data: Value) -> StdResult<Response> {
+        match &data {
+            Value::String(s) if s.is_empty() => {
+                return Err(ContractError::InvalidJson.into());
+            }
+            Value::Object(map) if map.is_empty() => {
+                return Err(ContractError::InvalidJson.into());
+            }
+            Value::Array(arr) if arr.is_empty() => {
+                return Err(ContractError::InvalidJson.into());
+            }
+            _ => {}
+        }
+
+        // Serialize JSON value to string (to store/hash it)
+        let data_str = serde_json::to_string(&data).map_err(|_| ContractError::InvalidJson)?;
+
+        let id = NEXT_SENSOR_ID.load(ctx.deps.storage)?;
+
+        let sensor = Sensor {
+            id,
+            owner: ctx.info.sender.clone(),
+            data_str,
+            status: SensorStatus::Proposed,
+        };
+
+        SENSORS.save(ctx.deps.storage, id, &sensor)?;
+        NEXT_SENSOR_ID.save(ctx.deps.storage, &(id + 1))?;
+
+        Ok(Response::new()
+            .add_attribute("action", "submit_sensor")
+            .add_attribute("sensor_id", id.to_string())
+            .add_attribute("owner", ctx.info.sender.to_string()))
+    }
+
+    #[sv::msg(exec)]
+    fn activate(&self, ctx: ExecCtx, sensor_id: u64) -> StdResult<Response> {
+        let admin = ADMIN.load(ctx.deps.storage)?;
+        if ctx.info.sender != admin {
             return Err(ContractError::Unauthorized.into());
         }
+
+        let mut sensor = SENSORS.load(ctx.deps.storage, sensor_id)?;
+        if !matches!(sensor.status, SensorStatus::Proposed) {
+            return Err(ContractError::AlreadyActivated.into());
+        }
+
+        sensor.status = SensorStatus::Active;
+        SENSORS.save(ctx.deps.storage, sensor_id, &sensor)?;
+
+        Ok(Response::new()
+            .add_attribute("action", "activate")
+            .add_attribute("sensor_id", sensor_id.to_string()))
+    }
+
+    #[sv::msg(exec)]
+    fn deactivate(&self, ctx: ExecCtx, sensor_id: u64) -> StdResult<Response> {
+        let admin = ADMIN.load(ctx.deps.storage)?;
+        if ctx.info.sender != admin {
+            return Err(ContractError::Unauthorized.into());
+        }
+
+        let mut sensor = SENSORS.load(ctx.deps.storage, sensor_id)?;
+        sensor.status = SensorStatus::Inactive;
+        SENSORS.save(ctx.deps.storage, sensor_id, &sensor)?;
+
+        Ok(Response::new()
+            .add_attribute("action", "deactivate")
+            .add_attribute("sensor_id", sensor_id.to_string()))
+    }
+
+    /// Add a verifier address (only callable by contract admin)
+    #[sv::msg(exec)]
+    fn add_verifier(&self, ctx: ExecCtx, verifier: Addr) -> StdResult<Response> {
+        let admin = ADMIN.load(ctx.deps.storage)?;
+        let sender = ctx.info.sender;
+        if sender != admin {
+            return Err(ContractError::Unauthorized.into());
+        }
+
+        if VERIFIERS
+            .may_load(ctx.deps.storage, verifier.clone())?
+            .unwrap_or(false)
+        {
+            return Err(ContractError::VerifierAlreadyExists.into());
+        }
+
         VERIFIERS.save(ctx.deps.storage, verifier.clone(), &true)?;
         Ok(Response::new()
             .add_attribute("action", "add_verifier")
@@ -58,16 +152,22 @@ impl CitizenScienceRegistry {
     }
 
     #[sv::msg(exec)]
-    fn submit_data(&self, ctx: ExecCtx, data: serde_json::Value) -> StdResult<Response> {
+    fn submit_data(&self, ctx: ExecCtx, sensor_id: u64, data: Value) -> StdResult<Response> {
+        let sensor = SENSORS.load(ctx.deps.storage, sensor_id)?;
+
+        if !matches!(sensor.status, SensorStatus::Active) {
+            return Err(ContractError::SensorInactive.into());
+        }
+
         // Reject empty JSON string, empty object, or empty array
         match &data {
-            serde_json::Value::String(s) if s.is_empty() => {
+            Value::String(s) if s.is_empty() => {
                 return Err(ContractError::InvalidJson.into());
             }
-            serde_json::Value::Object(map) if map.is_empty() => {
+            Value::Object(map) if map.is_empty() => {
                 return Err(ContractError::InvalidJson.into());
             }
-            serde_json::Value::Array(arr) if arr.is_empty() => {
+            Value::Array(arr) if arr.is_empty() => {
                 return Err(ContractError::InvalidJson.into());
             }
             _ => {}
@@ -90,10 +190,11 @@ impl CitizenScienceRegistry {
             return Err(ContractError::DuplicateData.into());
         }
 
-        let id = NEXT_ID.load(ctx.deps.storage)?;
+        let id = NEXT_ENTRY_ID.load(ctx.deps.storage)?;
 
         let entry = DataEntry {
             id,
+            sensor_id,
             submitter: ctx.info.sender.clone(),
             data_str: data_str.clone(),
             verified: false,
@@ -103,7 +204,7 @@ impl CitizenScienceRegistry {
 
         DATA_ENTRIES.save(ctx.deps.storage, id, &entry)?;
         DATA_HASHES.save(ctx.deps.storage, data_hash.clone(), &true)?;
-        NEXT_ID.save(ctx.deps.storage, &(id + 1))?;
+        NEXT_ENTRY_ID.save(ctx.deps.storage, &(id + 1))?;
 
         Ok(Response::new()
             .add_attribute("action", "submit_data")
@@ -137,9 +238,10 @@ impl CitizenScienceRegistry {
     }
 
     #[sv::msg(exec)]
-    fn reward_contributor(&self, ctx: ExecCtx, entry_id: u64) -> StdResult<Response> {
-        let owner = OWNER.load(ctx.deps.storage)?;
-        if ctx.info.sender != owner {
+    fn reward_submitter(&self, ctx: ExecCtx, entry_id: u64) -> StdResult<Response> {
+        let admin = ADMIN.load(ctx.deps.storage)?;
+        let sender = ctx.info.sender;
+        if sender != admin {
             return Err(ContractError::Unauthorized.into());
         }
 
@@ -152,36 +254,61 @@ impl CitizenScienceRegistry {
             return Err(ContractError::AlreadyRewarded.into());
         }
 
-        // Check that caller provided exactly the right reward
-        let sent = ctx.info.funds.iter().find(|c| c.denom == ATOM);
-        match sent {
-            Some(coin) if coin.amount == Uint128::from(REWARD_AMOUNT) => (),
-            _ => return Err(ContractError::InvalidFunds.into()),
-        }
+        let stored_denom = DENOM.load(ctx.deps.storage)?;
 
+        // Find the sent coin with stored denom
+        let sent_coin = ctx.info.funds.iter().find(|c| c.denom == stored_denom);
+        let reward_amount = match sent_coin {
+            Some(coin) => coin.amount,
+            None => return Err(ContractError::InvalidFunds.into()),
+        };
+
+        // Mark as rewarded
         entry.rewarded = true;
         DATA_ENTRIES.save(ctx.deps.storage, entry_id, &entry)?;
 
-        // Send the received funds to the contributor
+        // Send the received funds to the submitter
         let send_msg = BankMsg::Send {
             to_address: entry.submitter.to_string(),
             amount: vec![Coin {
-                denom: ATOM.to_string(),
-                amount: Uint128::from(REWARD_AMOUNT),
+                denom: stored_denom,
+                amount: reward_amount,
             }],
         };
 
         Ok(Response::new()
             .add_message(send_msg)
-            .add_attribute("action", "reward_contributor")
+            .add_attribute("action", "reward_submitter")
             .add_attribute("entry_id", entry_id.to_string())
             .add_attribute("recipient", entry.submitter.to_string())
-            .add_attribute("amount", REWARD_AMOUNT.to_string()))
+            .add_attribute("amount", reward_amount.to_string()))
+    }
+
+    #[sv::msg(query)]
+    fn get_sensor(&self, ctx: QueryCtx, sensor_id: u64) -> StdResult<Sensor> {
+        SENSORS.load(ctx.deps.storage, sensor_id)
     }
 
     #[sv::msg(query)]
     fn get_data_entry(&self, ctx: QueryCtx, entry_id: u64) -> StdResult<DataEntry> {
         DATA_ENTRIES.load(ctx.deps.storage, entry_id)
+    }
+
+    #[sv::msg(query)]
+    fn list_sensors(
+        &self,
+        ctx: QueryCtx,
+        start_after: Option<u64>,
+        limit: Option<u32>,
+    ) -> StdResult<Vec<Sensor>> {
+        let limit = limit.unwrap_or(10).min(30) as usize;
+        let start = start_after.map(Bound::exclusive);
+
+        SENSORS
+            .range(ctx.deps.storage, start, None, Order::Ascending)
+            .take(limit)
+            .map(|item| item.map(|(_, sensor)| sensor))
+            .collect()
     }
 
     #[sv::msg(query)]
@@ -219,42 +346,418 @@ impl CitizenScienceRegistry {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use sylvia::cw_multi_test::IntoAddr;
     use sylvia::cw_std::CosmosMsg::Bank;
     use sylvia::cw_std::coin;
     use sylvia::cw_std::testing::{message_info, mock_dependencies, mock_env};
 
+    pub const REWARD_AMOUNT: u128 = 10;
+
     #[test]
-    fn init() {
-        let owner = "owner".into_addr();
+    fn instantiate() {
+        let admin = "admin".into_addr();
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
-        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
-        let stored_owner = OWNER.load(deps.as_ref().storage).unwrap();
-        assert_eq!(stored_owner, owner);
+        let stored_admin = ADMIN.load(deps.as_ref().storage).unwrap();
+        assert_eq!(stored_admin, admin);
 
-        let stored_next_id = NEXT_ID.load(deps.as_ref().storage).unwrap();
-        assert_eq!(stored_next_id, 1);
+        let stored_next_sensor_id = NEXT_SENSOR_ID.load(deps.as_ref().storage).unwrap();
+        assert_eq!(stored_next_sensor_id, 1);
+
+        let stored_next_entry_id = NEXT_ENTRY_ID.load(deps.as_ref().storage).unwrap();
+        assert_eq!(stored_next_entry_id, 1);
+    }
+
+    #[test]
+    fn instantiate_defaults_to_ustake_if_denom_not_provided() {
+        let admin = "admin".into_addr();
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        // Call instantiate without providing a denom
+        contract.instantiate(ctx, None).unwrap();
+
+        // Load and assert the default denom is used
+        let stored_denom = DENOM.load(deps.as_ref().storage).unwrap();
+        assert_eq!(stored_denom, "ustake".to_string());
+    }
+
+    #[test]
+    fn submit_sensor_rejects_invalid_json_values() {
+        let sender = Addr::unchecked("user");
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&sender, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let invalid_inputs = vec![
+            serde_json::json!(""), // Empty string
+            serde_json::json!([]), // Empty array
+            serde_json::json!({}), // Empty object
+        ];
+
+        for invalid_json in invalid_inputs {
+            let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&sender, &[])));
+            let err = contract.submit_sensor(exec_ctx, invalid_json).unwrap_err();
+            assert!(
+                err.to_string().contains("Data is not valid json"),
+                "Expected InvalidJson error, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn submit_sensor_accepts_valid_json() {
+        let submitter = "submitter".into_addr();
+        let admin = Addr::unchecked("admin");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let valid_json_str = r#"{"name": "field sensor", "location": "field"}"#;
+        let valid_json: serde_json::Value = serde_json::from_str(valid_json_str).unwrap();
+
+        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+
+        // Call submit_sensor with valid JSON
+        let res = contract.submit_sensor(exec_ctx, valid_json);
+
+        assert!(
+            res.is_ok(),
+            "Expected submit_sensor to succeed with valid JSON"
+        );
+
+        // Verify sensor stored correctly
+        let sensor = SENSORS
+            .load(deps.as_ref().storage, 1)
+            .expect("Sensor should exist");
+
+        assert_eq!(sensor.id, 1);
+        assert_eq!(sensor.owner, submitter);
+        assert!(sensor.data_str.contains("field sensor"));
+        assert_eq!(sensor.status, SensorStatus::Proposed);
+    }
+
+    #[test]
+    fn submit_sensor_increments_id_for_multiple_sensors() {
+        let sender = Addr::unchecked("user");
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&sender, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let valid_json1 = serde_json::json!({"name": "sensor1"});
+        let valid_json2 = serde_json::json!({"name": "sensor2"});
+
+        // Submit first sensor
+        let exec_ctx1 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&sender, &[])));
+        let res1 = contract.submit_sensor(exec_ctx1, valid_json1);
+        assert!(res1.is_ok());
+
+        // Submit second sensor
+        let exec_ctx2 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&sender, &[])));
+        let res2 = contract.submit_sensor(exec_ctx2, valid_json2);
+        assert!(res2.is_ok());
+
+        // Check sensors stored with incremented ids
+        let sensor1 = SENSORS
+            .load(deps.as_ref().storage, 1)
+            .expect("Sensor 1 missing");
+        let sensor2 = SENSORS
+            .load(deps.as_ref().storage, 2)
+            .expect("Sensor 2 missing");
+
+        assert_eq!(sensor1.id, 1);
+        assert_eq!(sensor1.owner, sender);
+        assert!(sensor1.data_str.contains("sensor1"));
+
+        assert_eq!(sensor2.id, 2);
+        assert_eq!(sensor2.owner, sender);
+        assert!(sensor2.data_str.contains("sensor2"));
+    }
+
+    #[test]
+    fn submit_sensor_records_correct_owner() {
+        let user1 = Addr::unchecked("user1");
+        let user2 = Addr::unchecked("user2");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&user1, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let sensor_json = serde_json::json!({"name": "owner test"});
+
+        // user1 submits a sensor
+        let exec_ctx_user1 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user1, &[])));
+        let res1 = contract.submit_sensor(exec_ctx_user1, sensor_json.clone());
+        assert!(res1.is_ok());
+
+        // user2 submits a sensor
+        let exec_ctx_user2 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user2, &[])));
+        let res2 = contract.submit_sensor(exec_ctx_user2, sensor_json.clone());
+        assert!(res2.is_ok());
+
+        // Verify owners saved correctly
+        let sensor1 = SENSORS
+            .load(deps.as_ref().storage, 1)
+            .expect("Sensor 1 missing");
+        let sensor2 = SENSORS
+            .load(deps.as_ref().storage, 2)
+            .expect("Sensor 2 missing");
+
+        assert_eq!(sensor1.owner, user1);
+        assert_eq!(sensor2.owner, user2);
+    }
+
+    #[test]
+    fn activate_sensor_succeeds_for_admin_and_proposed_sensor() {
+        let admin = Addr::unchecked("admin");
+        let user = Addr::unchecked("user");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        // Instantiate contract with admin
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert a proposed sensor owned by user
+        let sensor = Sensor {
+            id: 1,
+            owner: user.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Proposed,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // Create ExecCtx for admin activating sensor #1
+        let activate_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let res = contract.activate(activate_ctx, 1);
+
+        assert!(res.is_ok(), "Expected activation to succeed for admin");
+
+        // Check sensor status updated to Active
+        let updated_sensor = SENSORS.load(deps.as_ref().storage, 1).unwrap();
+        assert_eq!(updated_sensor.status, SensorStatus::Active);
+    }
+
+    #[test]
+    fn activate_sensor_fails_for_non_admin() {
+        let admin = Addr::unchecked("admin");
+        let user = Addr::unchecked("user");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert proposed sensor owned by user
+        let sensor = Sensor {
+            id: 1,
+            owner: user.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Proposed,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // ExecCtx for non-admin user tries to activate
+        let non_admin_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
+        let err = contract.activate(non_admin_ctx, 1).unwrap_err();
+
+        // Expect Unauthorized error
+        assert!(
+            err.to_string().contains("Unauthorized"),
+            "Expected Unauthorized error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn activate_sensor_fails_if_already_active() {
+        let admin = Addr::unchecked("admin");
+        let user = Addr::unchecked("user");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert a sensor already Active
+        let sensor = Sensor {
+            id: 1,
+            owner: user.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        let admin_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let err = contract.activate(admin_ctx, 1).unwrap_err();
+
+        // Expect AlreadyActivated error
+        assert!(
+            err.to_string().contains("Sensor is already activated"),
+            "Expected AlreadyActivated error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn activate_sensor_fails_if_sensor_not_found() {
+        let admin = Addr::unchecked("admin");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let admin_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        // Try activating a sensor id that does not exist
+        let err = contract.activate(admin_ctx, 999).unwrap_err();
+
+        assert!(
+            err.to_string().contains("not found"),
+            "Expected NotFound error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn deactivate_sensor_succeeds_for_admin() {
+        let admin = Addr::unchecked("admin");
+        let user = Addr::unchecked("user");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert a sensor (can be any status)
+        let sensor = Sensor {
+            id: 1,
+            owner: user.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // deactivating sensor
+        let deactivate_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let res = contract.deactivate(deactivate_ctx, 1);
+
+        assert!(res.is_ok(), "Expected deactivate to succeed for admin");
+
+        // Check sensor status updated to Inactive
+        let updated_sensor = SENSORS.load(deps.as_ref().storage, 1).unwrap();
+        assert_eq!(updated_sensor.status, SensorStatus::Inactive);
+    }
+
+    #[test]
+    fn deactivate_sensor_fails_for_non_admin() {
+        let admin = Addr::unchecked("admin");
+        let user = Addr::unchecked("user");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert a sensor
+        let sensor = Sensor {
+            id: 1,
+            owner: user.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // Non-admin user tries to deactivate
+        let non_admin_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
+        let err = contract.deactivate(non_admin_ctx, 1).unwrap_err();
+
+        assert!(
+            err.to_string().contains("Unauthorized"),
+            "Expected Unauthorized error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn deactivate_sensor_fails_if_sensor_not_found() {
+        let admin = Addr::unchecked("admin");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let admin_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        // Try deactivating a sensor id that does not exist
+        let err = contract.deactivate(admin_ctx, 999).unwrap_err();
+
+        assert!(
+            err.to_string().contains("not found"),
+            "Expected NotFound error, got: {err}"
+        );
     }
 
     #[test]
     fn add_verifier_unauthorized() {
-        let owner = "owner".into_addr();
-        let not_owner = "not_owner".into_addr();
+        let admin = "admin".into_addr();
+        let not_admin = "not_admin".into_addr();
         let verifier = "verifier".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
-        // Try to add verifier from a non-owner
-        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&not_owner, &[])));
+        // Try to add verifier from a non-admin
+        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&not_admin, &[])));
 
         let err = contract.add_verifier(exec_ctx, verifier).unwrap_err();
         assert!(
@@ -264,18 +767,20 @@ mod tests {
     }
 
     #[test]
-    fn add_verifier_ok() {
-        let owner = "owner".into_addr();
+    fn add_verifier_success() {
+        let admin = "admin".into_addr();
         let verifier = "verifier".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
-        // Add verifier as the owner
-        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        // Add verifier as the admin
+        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
         let res = contract.add_verifier(exec_ctx, verifier.clone()).unwrap();
 
         // Check attributes
@@ -296,34 +801,92 @@ mod tests {
     }
 
     #[test]
-    fn submit_data_accepts_valid_json() {
-        let sender = "user".into_addr();
+    fn add_verifier_twice() {
+        let admin = "admin".into_addr();
+        let verifier = "verifier".into_addr();
+
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx =
-            InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&sender, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
-        // Submit valid JSON
-        let valid_json_str = r#"{"temperature": 24.5, "location": "field"}"#.to_string();
-        let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
+        // Add verifier the first time (should succeed)
+        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract.add_verifier(exec_ctx, verifier.clone()).unwrap();
 
-        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&sender, &[])));
-        let res = contract.submit_data(exec_ctx, valid_json);
+        // Try adding the same verifier again (should fail)
+        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let err = contract.add_verifier(exec_ctx, verifier).unwrap_err();
+
+        assert!(
+            err.to_string().contains("Verifier already exists"),
+            "Expected VerifierAlreadyExists error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn submit_data_accepts_valid_json() {
+        let submitter = Addr::unchecked("submitter");
+        let admin = Addr::unchecked("admin");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        // Set up instantiation context with admin
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Submit a sensor from the submitter
+        let sensor_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        let sensor_data_str = r#"{"name": "field", "location": "field"}"#;
+        let valid_json: Value = serde_json::from_str(sensor_data_str).unwrap();
+        let submit_res = contract.submit_sensor(sensor_ctx, valid_json);
+
+        assert!(submit_res.is_ok());
+
+        // Activate the sensor with admin
+        let activate_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let activate_res = contract.activate(activate_ctx, 1);
+        assert!(
+            activate_res.is_ok(),
+            "Expected sensor activation to succeed"
+        );
+
+        // Submit valid JSON data
+        let valid_json_str = r#"{"temperature": 24.5, "location": "field"}"#;
+        let valid_json: Value = serde_json::from_str(valid_json_str).unwrap();
+        let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        let res = contract.submit_data(submit_ctx, 1, valid_json);
 
         assert!(res.is_ok(), "Expected success on valid JSON");
     }
 
     #[test]
     fn submit_data_rejects_invalid_json_value() {
-        let sender = "user".into_addr();
+        let submitter = "submitter".into_addr();
+        let admin = Addr::unchecked("admin");
+
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx =
-            InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&sender, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
         let invalid_values = vec![
             serde_json::json!({}), // empty object
@@ -332,8 +895,9 @@ mod tests {
         ];
 
         for invalid_json in invalid_values {
-            let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&sender, &[])));
-            let err = contract.submit_data(exec_ctx, invalid_json).unwrap_err();
+            let exec_ctx =
+                ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+            let err = contract.submit_data(exec_ctx, 1, invalid_json).unwrap_err();
 
             assert!(
                 err.to_string().contains("Data is not valid json"),
@@ -344,47 +908,113 @@ mod tests {
 
     #[test]
     fn submit_data_duplicate_hash_rejected() {
-        let user = "user".into_addr();
+        let submitter = "submitter".into_addr();
+        let admin = Addr::unchecked("admin");
+
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
         let valid_json_str = r#"{"temp": 22}"#.to_string();
-        let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
 
-        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
-        contract.submit_data(exec_ctx, valid_json.clone()).unwrap();
+        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        contract
+            .submit_data(exec_ctx, 1, valid_json.clone())
+            .unwrap();
 
-        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
-        let err = contract.submit_data(exec_ctx, valid_json).unwrap_err();
+        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        let err = contract.submit_data(exec_ctx, 1, valid_json).unwrap_err();
         assert!(err.to_string().contains("Duplicate"));
     }
 
     #[test]
+    fn submit_data_fails_for_inactive_sensor() {
+        let admin = "admin".into_addr();
+        let submitter = "submitter".into_addr();
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an inactive sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Inactive,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // Prepare valid JSON data
+        let valid_json_str = r#"{"temperature": 42}"#;
+        let valid_json: Value = serde_json::from_str(valid_json_str).unwrap();
+
+        // Attempt to submit data to inactive sensor
+        let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        let err = contract.submit_data(submit_ctx, 1, valid_json).unwrap_err();
+
+        assert_eq!(err, ContractError::SensorInactive.into());
+    }
+
+    #[test]
     fn verify_data_success() {
-        let owner = "owner".into_addr();
+        let admin = "admin".into_addr();
         let verifier = "verifier".into_addr();
         let submitter = "submitter".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Submit a sensor from the submitter
+        let sensor_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        let sensor_data_str = r#"{"name": "field", "location": "field"}"#;
+        let valid_json: Value = serde_json::from_str(sensor_data_str).unwrap();
+        let submit_res = contract.submit_sensor(sensor_ctx, valid_json);
+
+        assert!(submit_res.is_ok());
+
+        // Activate the sensor with admin
+        let activate_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let activate_res = contract.activate(activate_ctx, 1);
+        assert!(
+            activate_res.is_ok(),
+            "Expected sensor activation to succeed"
+        );
 
         let add_verifier_ctx =
-            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
         contract
             .add_verifier(add_verifier_ctx, verifier.clone())
             .unwrap();
 
         let valid_json_str = r#"{"data": "value"}"#.to_string();
-        let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
 
         let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
-        contract.submit_data(submit_ctx, valid_json).unwrap();
+        contract.submit_data(submit_ctx, 1, valid_json).unwrap();
 
         // Verify data
         let verify_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&verifier, &[])));
@@ -401,20 +1031,31 @@ mod tests {
 
     #[test]
     fn verify_data_unauthorized() {
-        let owner = "owner".into_addr();
+        let admin = "admin".into_addr();
         let submitter = "submitter".into_addr();
         let not_verifier = "not_verifier".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
         let valid_json_str = r#"{"some": "data"}"#.to_string();
-        let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
         let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
-        contract.submit_data(submit_ctx, valid_json).unwrap();
+        contract.submit_data(submit_ctx, 1, valid_json).unwrap();
 
         let verify_ctx =
             ExecCtx::from((deps.as_mut(), mock_env(), message_info(&not_verifier, &[])));
@@ -428,27 +1069,38 @@ mod tests {
 
     #[test]
     fn verify_data_already_verified() {
-        let owner = "owner".into_addr();
+        let admin = "admin".into_addr();
         let verifier = "verifier".into_addr();
         let submitter = "submitter".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
         let add_verifier_ctx =
-            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
         contract
             .add_verifier(add_verifier_ctx, verifier.clone())
             .unwrap();
 
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
         // Submit data
         let valid_json_str = r#"{"x": 42}"#.to_string();
-        let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
         let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
-        contract.submit_data(submit_ctx, valid_json).unwrap();
+        contract.submit_data(submit_ctx, 1, valid_json).unwrap();
 
         // First verification
         let verify_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&verifier, &[])));
@@ -465,45 +1117,86 @@ mod tests {
     }
 
     #[test]
-    fn reward_contributor_success() {
-        let owner = "owner".into_addr();
+    fn verify_data_fails_for_nonexistent_entry() {
+        let admin = "admin".into_addr();
+        let verifier = "verifier".into_addr();
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Add verifier
+        let add_verifier_ctx =
+            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .add_verifier(add_verifier_ctx, verifier.clone())
+            .unwrap();
+
+        // Attempt to verify a non-existent entry (e.g. entry ID = 42)
+        let verify_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&verifier, &[])));
+        let err = contract
+            .verify_data(verify_ctx, 42)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("not found"), "Unexpected error message: {err}");
+    }
+
+    #[test]
+    fn reward_submitter_success() {
+        let admin = "admin".into_addr();
         let verifier = "verifier".into_addr();
         let submitter = "submitter".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
         let add_verifier_ctx =
-            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
         contract
             .add_verifier(add_verifier_ctx, verifier.clone())
             .unwrap();
 
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
         let valid_json_str = r#"{"valid": true}"#.to_string();
-        let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
         let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
-        contract.submit_data(submit_ctx, valid_json).unwrap();
+        contract.submit_data(submit_ctx, 1, valid_json).unwrap();
 
         let verify_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&verifier, &[])));
         contract.verify_data(verify_ctx, 1).unwrap();
 
         // Prepare reward funds
-        let reward_funds = vec![coin(REWARD_AMOUNT, ATOM)];
+        let reward_funds = vec![coin(REWARD_AMOUNT, DEFAULT_DENOM)];
 
-        // Reward contributor with funds
-        let reward_info = message_info(&owner, &reward_funds);
+        // Reward submitter with funds
+        let reward_info = message_info(&admin, &reward_funds);
         let reward_ctx = ExecCtx::from((deps.as_mut(), mock_env(), reward_info));
 
-        let res = contract.reward_contributor(reward_ctx, 1).unwrap();
+        let res = contract.reward_submitter(reward_ctx, 1).unwrap();
 
         assert!(
             res.attributes
                 .iter()
-                .any(|attr| attr.key == "action" && attr.value == "reward_contributor"),
-            "Missing reward_contributor action attribute"
+                .any(|attr| attr.key == "action" && attr.value == "reward_submitter"),
+            "Missing reward_submitter action attribute"
         );
         assert!(
             res.messages
@@ -514,25 +1207,36 @@ mod tests {
     }
 
     #[test]
-    fn reward_contributor_not_verified() {
-        let owner = "owner".into_addr();
+    fn reward_submitter_not_verified() {
+        let admin = "admin".into_addr();
         let submitter = "submitter".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
         // Submit data
         let valid_json_str = r#"{"raw": "data"}"#.to_string();
-        let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
         let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
-        contract.submit_data(submit_ctx, valid_json).unwrap();
+        contract.submit_data(submit_ctx, 1, valid_json).unwrap();
 
         // Try to reward without verification
-        let reward_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        let err = contract.reward_contributor(reward_ctx, 1).unwrap_err();
+        let reward_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let err = contract.reward_submitter(reward_ctx, 1).unwrap_err();
 
         assert!(
             err.to_string().contains("Data entry not verified yet"),
@@ -541,69 +1245,488 @@ mod tests {
     }
 
     #[test]
-    fn reward_contributor_already_rewarded() {
-        let owner = "owner".into_addr();
+    fn reward_submitter_already_rewarded() {
+        let admin = "admin".into_addr();
         let verifier = "verifier".into_addr();
         let submitter = "submitter".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
         // Add verifier
         let add_verifier_ctx =
-            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
         contract
             .add_verifier(add_verifier_ctx, verifier.clone())
             .unwrap();
 
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
         // Submit and verify
         let valid_json_str = r#"{"hello": "world"}"#.to_string();
-        let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
         let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
-        contract.submit_data(submit_ctx, valid_json).unwrap();
+        contract.submit_data(submit_ctx, 1, valid_json).unwrap();
 
         let verify_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&verifier, &[])));
         contract.verify_data(verify_ctx, 1).unwrap();
 
-        // First reward call with enough funds (e.g. 1000 ATOM if that's the reward amount)
-        let reward_funds = vec![coin(REWARD_AMOUNT, ATOM)];
+        // First reward call with enough funds (e.g. 1000 DEFAULT_DENOM if that's the reward amount)
+        let reward_funds = vec![coin(REWARD_AMOUNT, DEFAULT_DENOM)];
         let reward_ctx = ExecCtx::from((
             deps.as_mut(),
             mock_env(),
-            message_info(&owner, &reward_funds),
+            message_info(&admin, &reward_funds),
         ));
-        contract.reward_contributor(reward_ctx, 1).unwrap();
+        contract.reward_submitter(reward_ctx, 1).unwrap();
 
         // Second reward call with same sender (even with funds) should fail as already rewarded
         let reward_ctx = ExecCtx::from((
             deps.as_mut(),
             mock_env(),
-            message_info(&owner, &reward_funds),
+            message_info(&admin, &reward_funds),
         ));
-        let err = contract.reward_contributor(reward_ctx, 1).unwrap_err();
+        let err = contract.reward_submitter(reward_ctx, 1).unwrap_err();
 
         assert_eq!(err, ContractError::AlreadyRewarded.into());
     }
 
     #[test]
-    fn get_data_entry_success() {
-        let owner = "owner".into_addr();
+    fn reward_submitter_fails_without_funds() {
+        let admin = "admin".into_addr();
+        let verifier = "verifier".into_addr();
         let submitter = "submitter".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
-        let valid_json_str = r#"{"key": "value"}"#.to_string();
-        let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
+        // Add verifier
+        let add_verifier_ctx =
+            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .add_verifier(add_verifier_ctx, verifier.clone())
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // Submit and verify
+        let valid_json_str = r#"{"hello": "world"}"#.to_string();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
+        let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        contract.submit_data(submit_ctx, 1, valid_json).unwrap();
+
+        let verify_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&verifier, &[])));
+        contract.verify_data(verify_ctx, 1).unwrap();
+
+        // Attempt to reward with no funds
+        let reward_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let err = contract.reward_submitter(reward_ctx, 1).unwrap_err();
+
+        assert_eq!(err, ContractError::InvalidFunds.into());
+    }
+
+    #[test]
+    fn reward_submitter_fails_for_non_admin() {
+        let admin = "admin".into_addr();
+        let verifier = "verifier".into_addr();
+        let submitter = "submitter".into_addr();
+        let non_admin = "random_user".into_addr();
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Add verifier
+        let add_verifier_ctx =
+            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .add_verifier(add_verifier_ctx, verifier.clone())
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // Submit and verify
+        let valid_json_str = r#"{"hello": "world"}"#.to_string();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
+        let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        contract.submit_data(submit_ctx, 1, valid_json).unwrap();
+
+        let verify_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&verifier, &[])));
+        contract.verify_data(verify_ctx, 1).unwrap();
+
+        // Attempt to reward using a non-admin address
+        let reward_funds = vec![coin(REWARD_AMOUNT, DEFAULT_DENOM)];
+        let reward_ctx = ExecCtx::from((
+            deps.as_mut(),
+            mock_env(),
+            message_info(&non_admin, &reward_funds),
+        ));
+        let err = contract.reward_submitter(reward_ctx, 1).unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized.into());
+    }
+
+    #[test]
+    fn reward_submitter_fails_for_nonexistent_entry() {
+        let admin = "admin".into_addr();
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Attempt to reward a non-existent data entry (e.g. entry ID = 42)
+        let reward_ctx = ExecCtx::from((
+            deps.as_mut(),
+            mock_env(),
+            message_info(&admin, &[coin(1000, DEFAULT_DENOM)]),
+        ));
+        let err = contract
+            .reward_submitter(reward_ctx, 42)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("not found"), "Unexpected error message: {err}");
+    }
+
+    #[test]
+    fn full_data_entry_lifecycle() {
+        let admin = "admin".into_addr();
+        let verifier = "verifier".into_addr();
+        let submitter = "submitter".into_addr();
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        // Instantiate contract
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Add verifier
+        let add_verifier_ctx =
+            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .add_verifier(add_verifier_ctx, verifier.clone())
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // Submit data by submitter
+        let valid_json_str = r#"{"valid": true}"#.to_string();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
         let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
         contract
-            .submit_data(submit_ctx, valid_json.clone())
+            .submit_data(submit_ctx, 1, valid_json.clone())
+            .unwrap();
+
+        // Verify data by verifier
+        let verify_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&verifier, &[])));
+        contract.verify_data(verify_ctx, 1).unwrap();
+
+        // Reward submitter: send funds along with the message
+        let reward_funds = vec![coin(REWARD_AMOUNT, DEFAULT_DENOM)];
+        let reward_ctx = ExecCtx::from((
+            deps.as_mut(),
+            mock_env(),
+            message_info(&admin, &reward_funds),
+        ));
+        contract.reward_submitter(reward_ctx, 1).unwrap();
+
+        // Query final entry and assert full state
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let entry = contract.get_data_entry(query_ctx, 1).unwrap();
+
+        assert_eq!(entry.id, 1);
+        assert_eq!(entry.data_str, valid_json.to_string());
+        assert_eq!(entry.submitter, submitter);
+        assert!(entry.verified);
+        assert_eq!(entry.verifier, Some(verifier));
+        assert!(entry.rewarded);
+    }
+
+    #[test]
+    fn get_sensor_returns_existing_sensor() {
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        // Prepopulate a sensor in storage
+        let sensor = Sensor {
+            id: 1,
+            owner: Addr::unchecked("user"),
+            data_str: "{\"type\": \"temp\"}".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+
+        // Query the sensor
+        let result = contract.get_sensor(query_ctx, 1);
+
+        assert!(result.is_ok(), "Expected get_sensor to succeed");
+        let returned = result.unwrap();
+        assert_eq!(returned.id, sensor.id);
+        assert_eq!(returned.owner, sensor.owner);
+        assert_eq!(returned.data_str, sensor.data_str);
+        assert_eq!(returned.status, sensor.status);
+    }
+
+    #[test]
+    fn get_sensor_returns_error_when_not_found() {
+        let contract = CitizenScienceRegistry::new();
+        let deps = mock_dependencies();
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+
+        let result = contract.get_sensor(query_ctx, 42);
+
+        assert!(
+            result.is_err(),
+            "Expected get_sensor to fail for nonexistent sensor"
+        );
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"), "Unexpected error message: {err}");
+    }
+
+    #[test]
+    fn list_sensors_empty_returns_empty_list() {
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((
+            deps.as_mut(),
+            mock_env(),
+            message_info(&"admin".into_addr(), &[]),
+        ));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract.list_sensors(query_ctx, None, None).unwrap();
+
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn list_sensors_with_exact_page_boundary() {
+        let contract = CitizenScienceRegistry::new();
+        let owner = "user".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for i in 1..=4 {
+            let sensor = Sensor {
+                id: i,
+                owner: owner.clone(),
+                data_str: format!("{{\"sensor\": {i}}}"),
+                status: SensorStatus::Proposed,
+            };
+            SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let first_page = contract.list_sensors(query_ctx, None, Some(2)).unwrap();
+        assert_eq!(first_page.len(), 2);
+        assert_eq!(first_page[0].id, 1);
+        assert_eq!(first_page[1].id, 2);
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let second_page = contract.list_sensors(query_ctx, Some(2), Some(2)).unwrap();
+        assert_eq!(second_page.len(), 2);
+        assert_eq!(second_page[0].id, 3);
+        assert_eq!(second_page[1].id, 4);
+    }
+
+    #[test]
+    fn list_sensors_start_after_last_id_returns_empty() {
+        let contract = CitizenScienceRegistry::new();
+        let owner = "owner".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for i in 1..=3 {
+            let sensor = Sensor {
+                id: i,
+                owner: owner.clone(),
+                data_str: "some data".to_string(),
+                status: SensorStatus::Proposed,
+            };
+            SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract.list_sensors(query_ctx, Some(3), Some(10)).unwrap();
+
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn list_sensors_limit_caps_at_30() {
+        let contract = CitizenScienceRegistry::new();
+        let owner = "owner".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for i in 1..=50 {
+            let sensor = Sensor {
+                id: i,
+                owner: owner.clone(),
+                data_str: format!("{{\"sensor\": {i}}}"),
+                status: SensorStatus::Active,
+            };
+            SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract.list_sensors(query_ctx, None, Some(100)).unwrap();
+
+        assert_eq!(result.len(), 30);
+    }
+
+    #[test]
+    fn list_sensors_defaults_to_10() {
+        let contract = CitizenScienceRegistry::new();
+        let owner = "owner".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for i in 1..=15 {
+            let sensor = Sensor {
+                id: i,
+                owner: owner.clone(),
+                data_str: format!("{{\"sensor\": {i}}}"),
+                status: SensorStatus::Proposed,
+            };
+            SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract.list_sensors(query_ctx, None, None).unwrap();
+
+        assert_eq!(result.len(), 10);
+    }
+
+    #[test]
+    fn list_sensors_returns_paginated_entries() {
+        let contract = CitizenScienceRegistry::new();
+        let owner = "user".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for i in 1..=3 {
+            let sensor = Sensor {
+                id: i,
+                owner: owner.clone(),
+                data_str: format!("{{\"sensor\": {i}}}"),
+                status: SensorStatus::Active,
+            };
+            SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let sensors = contract.list_sensors(query_ctx, None, Some(10)).unwrap();
+
+        assert_eq!(sensors.len(), 3);
+        assert_eq!(sensors[0].id, 1);
+        assert_eq!(sensors[2].id, 3);
+    }
+
+    #[test]
+    fn get_data_entry_success() {
+        let admin = "admin".into_addr();
+        let submitter = "submitter".into_addr();
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        let valid_json_str = r#"{"key": "value"}"#.to_string();
+        let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
+        let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        contract
+            .submit_data(submit_ctx, 1, valid_json.clone())
             .unwrap();
 
         // Query the data entry
@@ -619,67 +1742,16 @@ mod tests {
     }
 
     #[test]
-    fn full_data_entry_lifecycle() {
-        let owner = "owner".into_addr();
-        let verifier = "verifier".into_addr();
-        let submitter = "submitter".into_addr();
-
-        let contract = CitizenScienceRegistry::new();
-        let mut deps = mock_dependencies();
-
-        // Instantiate contract
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
-
-        // Add verifier
-        let add_verifier_ctx =
-            ExecCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract
-            .add_verifier(add_verifier_ctx, verifier.clone())
-            .unwrap();
-
-        // Submit data by submitter
-        let valid_json_str = r#"{"valid": true}"#.to_string();
-        let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
-        let submit_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
-        contract
-            .submit_data(submit_ctx, valid_json.clone())
-            .unwrap();
-
-        // Verify data by verifier
-        let verify_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&verifier, &[])));
-        contract.verify_data(verify_ctx, 1).unwrap();
-
-        // Reward contributor: send funds along with the message
-        let reward_funds = vec![coin(REWARD_AMOUNT, ATOM)];
-        let reward_ctx = ExecCtx::from((
-            deps.as_mut(),
-            mock_env(),
-            message_info(&owner, &reward_funds),
-        ));
-        contract.reward_contributor(reward_ctx, 1).unwrap();
-
-        // Query final entry and assert full state
-        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
-        let entry = contract.get_data_entry(query_ctx, 1).unwrap();
-
-        assert_eq!(entry.id, 1);
-        assert_eq!(entry.data_str, valid_json.to_string());
-        assert_eq!(entry.submitter, submitter);
-        assert!(entry.verified);
-        assert_eq!(entry.verifier, Some(verifier));
-        assert!(entry.rewarded);
-    }
-
-    #[test]
     fn get_data_entry_not_found() {
-        let owner = "owner".into_addr();
+        let admin = "admin".into_addr();
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
         // Instantiate contract
-        let inst_ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(inst_ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
         // Query for a non-existent entry
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
@@ -692,23 +1764,205 @@ mod tests {
     }
 
     #[test]
+    fn list_data_entries_empty_returns_empty_list() {
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((
+            deps.as_mut(),
+            mock_env(),
+            message_info(&"admin".into_addr(), &[]),
+        ));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract.list_data_entries(query_ctx, None, None).unwrap();
+
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn list_data_entries_with_exact_page_boundary() {
+        let contract = CitizenScienceRegistry::new();
+        let submitter = "submitter".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        for i in 1..=4 {
+            let json = format!(r#"{{"entry": {i}}}"#);
+            let value: Value = serde_json::from_str(&json).unwrap();
+            let exec_ctx =
+                ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+            contract.submit_data(exec_ctx, 1, value).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let first_page = contract
+            .list_data_entries(query_ctx, None, Some(2))
+            .unwrap();
+        assert_eq!(first_page.len(), 2);
+        assert_eq!(first_page[0].id, 1);
+        assert_eq!(first_page[1].id, 2);
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let second_page = contract
+            .list_data_entries(query_ctx, Some(2), Some(2))
+            .unwrap();
+        assert_eq!(second_page.len(), 2);
+        assert_eq!(second_page[0].id, 3);
+        assert_eq!(second_page[1].id, 4);
+    }
+
+    #[test]
+    fn list_data_entries_start_after_last_id_returns_empty() {
+        let contract = CitizenScienceRegistry::new();
+        let submitter = "submitter".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        for i in 1..=3 {
+            let json = format!(r#"{{"entry": {i}}}"#);
+            let value: Value = serde_json::from_str(&json).unwrap();
+            let exec_ctx =
+                ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+            contract.submit_data(exec_ctx, 1, value).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract
+            .list_data_entries(query_ctx, Some(3), Some(5))
+            .unwrap();
+
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn list_data_entries_limit_caps_at_30() {
+        let contract = CitizenScienceRegistry::new();
+        let submitter = "submitter".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        for i in 1..=50 {
+            let json = format!(r#"{{"entry": {i}}}"#);
+            let value: Value = serde_json::from_str(&json).unwrap();
+            let exec_ctx =
+                ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+            contract.submit_data(exec_ctx, 1, value).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract
+            .list_data_entries(query_ctx, None, Some(999))
+            .unwrap();
+
+        assert_eq!(result.len(), 30);
+    }
+
+    #[test]
+    fn list_data_entries_defaults_to_10() {
+        let contract = CitizenScienceRegistry::new();
+        let submitter = "submitter".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        for i in 1..=15 {
+            let json = format!(r#"{{"entry": {i}}}"#);
+            let value: Value = serde_json::from_str(&json).unwrap();
+            let exec_ctx =
+                ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+            contract.submit_data(exec_ctx, 1, value).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract.list_data_entries(query_ctx, None, None).unwrap();
+
+        assert_eq!(result.len(), 10);
+    }
+
+    #[test]
     fn list_data_entries_returns_paginated_entries() {
-        let owner = "owner".into_addr();
+        let admin = "admin".into_addr();
         let submitter = "submitter".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert an active sensor directly into storage
+        let sensor = Sensor {
+            id: 1,
+            owner: submitter.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
         // Submit 3 data entries
         for i in 0..3 {
             let valid_json_str = format!(r#"{{"entry": {i}}}"#);
-            let valid_json: serde_json::Value = serde_json::from_str(&valid_json_str).unwrap();
+            let valid_json: Value = serde_json::from_str(&valid_json_str).unwrap();
             let exec_ctx =
                 ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
-            contract.submit_data(exec_ctx, valid_json).unwrap();
+            contract.submit_data(exec_ctx, 1, valid_json).unwrap();
         }
 
         // Query entries
@@ -724,21 +1978,23 @@ mod tests {
 
     #[test]
     fn list_verifiers_returns_all_registered_addresses() {
-        let owner = "owner".into_addr();
+        let admin = "admin".into_addr();
         let verifier1 = "verifier1".into_addr();
         let verifier2 = "verifier2".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
         // Add verifiers
-        let ctx1 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        let ctx1 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
         contract.add_verifier(ctx1, verifier1.clone()).unwrap();
 
-        let ctx2 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        let ctx2 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
         contract.add_verifier(ctx2, verifier2.clone()).unwrap();
 
         // Query verifiers
@@ -751,19 +2007,39 @@ mod tests {
     }
 
     #[test]
+    fn list_verifiers_empty() {
+        let admin = "admin".into_addr();
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let verifiers = contract.list_verifiers(query_ctx).unwrap();
+
+        assert!(verifiers.is_empty());
+    }
+
+    #[test]
     fn is_verifier_returns_true_for_registered_and_false_for_unregistered() {
-        let owner = "owner".into_addr();
+        let admin = "admin".into_addr();
         let verifier1 = "verifier1".into_addr();
         let verifier2 = "verifier2".into_addr();
 
         let contract = CitizenScienceRegistry::new();
         let mut deps = mock_dependencies();
 
-        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
-        contract.instantiate(ctx).unwrap();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
 
-        // Add verifier1 as the owner
-        let ctx1 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        // Add verifier1 as the admin
+        let ctx1 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
         contract.add_verifier(ctx1, verifier1.clone()).unwrap();
 
         // Query verifier1 (should be true)
