@@ -300,14 +300,35 @@ impl CitizenScienceRegistry {
         ctx: QueryCtx,
         start_after: Option<u64>,
         limit: Option<u32>,
+        owner: Option<Addr>,          // ✅ filter by owner
+        status: Option<SensorStatus>, // ✅ new filter by status
     ) -> StdResult<Vec<Sensor>> {
         let limit = limit.unwrap_or(10).min(30) as usize;
         let start = start_after.map(Bound::exclusive);
 
         SENSORS
             .range(ctx.deps.storage, start, None, Order::Ascending)
+            .filter_map(|item| match item {
+                Ok((_, sensor)) => {
+                    // Filter by owner if specified
+                    if let Some(ref o) = owner {
+                        if sensor.owner != *o {
+                            return None;
+                        }
+                    }
+
+                    // Filter by status if specified
+                    if let Some(ref s) = status {
+                        if &sensor.status != s {
+                            return None;
+                        }
+                    }
+
+                    Some(Ok(sensor))
+                }
+                Err(e) => Some(Err(e)),
+            })
             .take(limit)
-            .map(|item| item.map(|(_, sensor)| sensor))
             .collect()
     }
 
@@ -1551,7 +1572,9 @@ pub mod tests {
             .unwrap();
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
-        let result = contract.list_sensors(query_ctx, None, None).unwrap();
+        let result = contract
+            .list_sensors(query_ctx, None, None, None, None)
+            .unwrap();
 
         assert_eq!(result.len(), 0);
     }
@@ -1578,13 +1601,17 @@ pub mod tests {
         }
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
-        let first_page = contract.list_sensors(query_ctx, None, Some(2)).unwrap();
+        let first_page = contract
+            .list_sensors(query_ctx, None, Some(2), None, None)
+            .unwrap();
         assert_eq!(first_page.len(), 2);
         assert_eq!(first_page[0].id, 1);
         assert_eq!(first_page[1].id, 2);
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
-        let second_page = contract.list_sensors(query_ctx, Some(2), Some(2)).unwrap();
+        let second_page = contract
+            .list_sensors(query_ctx, Some(2), Some(2), None, None)
+            .unwrap();
         assert_eq!(second_page.len(), 2);
         assert_eq!(second_page[0].id, 3);
         assert_eq!(second_page[1].id, 4);
@@ -1612,7 +1639,9 @@ pub mod tests {
         }
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
-        let result = contract.list_sensors(query_ctx, Some(3), Some(10)).unwrap();
+        let result = contract
+            .list_sensors(query_ctx, Some(3), Some(10), None, None)
+            .unwrap();
 
         assert_eq!(result.len(), 0);
     }
@@ -1639,7 +1668,9 @@ pub mod tests {
         }
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
-        let result = contract.list_sensors(query_ctx, None, Some(100)).unwrap();
+        let result = contract
+            .list_sensors(query_ctx, None, Some(100), None, None)
+            .unwrap();
 
         assert_eq!(result.len(), 30);
     }
@@ -1666,7 +1697,9 @@ pub mod tests {
         }
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
-        let result = contract.list_sensors(query_ctx, None, None).unwrap();
+        let result = contract
+            .list_sensors(query_ctx, None, None, None, None)
+            .unwrap();
 
         assert_eq!(result.len(), 10);
     }
@@ -1693,11 +1726,158 @@ pub mod tests {
         }
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
-        let sensors = contract.list_sensors(query_ctx, None, Some(10)).unwrap();
+        let sensors = contract
+            .list_sensors(query_ctx, None, Some(10), None, None)
+            .unwrap();
 
         assert_eq!(sensors.len(), 3);
         assert_eq!(sensors[0].id, 1);
         assert_eq!(sensors[2].id, 3);
+    }
+
+    #[test]
+    fn list_sensors_filters_by_owner() {
+        let contract = CitizenScienceRegistry::new();
+        let owner1 = "owner1".into_addr();
+        let owner2 = "owner2".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner1, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Add sensors for both owners
+        for i in 1..=5 {
+            let sensor = Sensor {
+                id: i,
+                owner: if i % 2 == 0 {
+                    owner2.clone()
+                } else {
+                    owner1.clone()
+                },
+                data_str: format!("{{\"sensor\": {i}}}"),
+                status: SensorStatus::Active,
+            };
+            SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let owner1_sensors = contract
+            .list_sensors(query_ctx, None, Some(10), Some(owner1.clone()), None)
+            .unwrap();
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let owner2_sensors = contract
+            .list_sensors(query_ctx, None, Some(10), Some(owner2.clone()), None)
+            .unwrap();
+
+        assert_eq!(owner1_sensors.len(), 3);
+        assert!(owner1_sensors.iter().all(|s| s.owner == owner1));
+
+        assert_eq!(owner2_sensors.len(), 2);
+        assert!(owner2_sensors.iter().all(|s| s.owner == owner2));
+    }
+
+    #[test]
+    fn list_sensors_filters_by_status() {
+        let contract = CitizenScienceRegistry::new();
+        let owner = "owner".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for i in 1..=5 {
+            let status = if i % 2 == 0 {
+                SensorStatus::Proposed
+            } else {
+                SensorStatus::Active
+            };
+            let sensor = Sensor {
+                id: i,
+                owner: owner.clone(),
+                data_str: format!("{{\"sensor\": {i}}}"),
+                status,
+            };
+            SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let active_sensors = contract
+            .list_sensors(query_ctx, None, Some(10), None, Some(SensorStatus::Active))
+            .unwrap();
+
+        assert_eq!(active_sensors.len(), 3);
+        assert!(
+            active_sensors
+                .iter()
+                .all(|s| s.status == SensorStatus::Active)
+        );
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let proposed_sensors = contract
+            .list_sensors(
+                query_ctx,
+                None,
+                Some(10),
+                None,
+                Some(SensorStatus::Proposed),
+            )
+            .unwrap();
+
+        assert_eq!(proposed_sensors.len(), 2);
+        assert!(
+            proposed_sensors
+                .iter()
+                .all(|s| s.status == SensorStatus::Proposed)
+        );
+    }
+
+    #[test]
+    fn list_sensors_filters_by_owner_and_status() {
+        let contract = CitizenScienceRegistry::new();
+        let owner1 = "owner1".into_addr();
+        let owner2 = "owner2".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner1, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for i in 1..=6 {
+            let owner = if i <= 3 { &owner1 } else { &owner2 };
+            let status = if i % 2 == 0 {
+                SensorStatus::Proposed
+            } else {
+                SensorStatus::Active
+            };
+            let sensor = Sensor {
+                id: i,
+                owner: owner.clone(),
+                data_str: format!("{{\"sensor\": {i}}}"),
+                status,
+            };
+            SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let owner2_proposed = contract
+            .list_sensors(
+                query_ctx,
+                None,
+                Some(10),
+                Some(owner2.clone()),
+                Some(SensorStatus::Proposed),
+            )
+            .unwrap();
+
+        assert_eq!(owner2_proposed.len(), 2);
+        assert_eq!(owner2_proposed[0].owner, owner2);
+        assert_eq!(owner2_proposed[0].status, SensorStatus::Proposed);
     }
 
     #[test]

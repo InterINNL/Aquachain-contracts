@@ -4,6 +4,7 @@ mod tests {
     use crate::contract::sv::mt::CitizenScienceRegistryProxy;
     use crate::contract::sv::mt::CodeId;
     use crate::contract::tests::REWARD_AMOUNT;
+    use crate::enums::SensorStatus;
     use crate::errors::ContractError;
     use serde_json::json;
     use sylvia::cw_multi_test::{BankSudo, IntoAddr, SudoMsg};
@@ -926,7 +927,7 @@ mod tests {
         }
 
         // Query all sensors
-        let sensors = contract.list_sensors(None, Some(10)).unwrap();
+        let sensors = contract.list_sensors(None, Some(10), None, None).unwrap();
         assert_eq!(sensors.len(), 3);
 
         for (i, sensor) in sensors.iter().enumerate() {
@@ -936,7 +937,7 @@ mod tests {
         }
 
         // Paginated query: start_after = 1
-        let page = contract.list_sensors(Some(1), Some(1)).unwrap();
+        let page = contract.list_sensors(Some(1), Some(1), None, None).unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].id, 2);
         assert_eq!(page[0].data_str, sensor_jsons[1].to_string());
@@ -969,7 +970,7 @@ mod tests {
         }
 
         // Query all
-        let sensors = contract.list_sensors(None, Some(10)).unwrap();
+        let sensors = contract.list_sensors(None, Some(10), None, None).unwrap();
         assert_eq!(sensors.len(), 3);
 
         for (i, sensor) in sensors.iter().enumerate() {
@@ -979,7 +980,7 @@ mod tests {
         }
 
         // Paginated query: start_after = 1, limit = 1
-        let page = contract.list_sensors(Some(1), Some(1)).unwrap();
+        let page = contract.list_sensors(Some(1), Some(1), None, None).unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].id, 2);
         assert_eq!(page[0].data_str, sensor_jsons[1].to_string());
@@ -1002,17 +1003,124 @@ mod tests {
             contract.submit_sensor(sensor).call(&submitter).unwrap();
         }
 
-        let result = contract.list_sensors(None, Some(0)).unwrap();
+        let result = contract.list_sensors(None, Some(0), None, None).unwrap();
         assert!(result.is_empty());
 
-        let result = contract.list_sensors(Some(5), Some(10)).unwrap();
+        let result = contract
+            .list_sensors(Some(5), Some(10), None, None)
+            .unwrap();
         assert!(result.is_empty());
 
         // limit > total remaining should return all remaining
-        let result = contract.list_sensors(Some(2), Some(10)).unwrap();
+        let result = contract
+            .list_sensors(Some(2), Some(10), None, None)
+            .unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].id, 3);
         assert_eq!(result[2].id, 5);
+    }
+
+    #[test]
+    fn integration_list_sensors_filters_by_owner() {
+        let app = App::default();
+        let code_id = CodeId::store_code(&app);
+        let admin = "admin".into_addr();
+        let owner1 = "owner1".into_addr();
+        let owner2 = "owner2".into_addr();
+
+        let contract = code_id
+            .instantiate(Some(DEFAULT_DENOM.to_string()))
+            .call(&admin)
+            .unwrap();
+
+        // Submit 5 sensors: odd ones by owner1, even ones by owner2
+        for i in 1..=5 {
+            let sender = if i % 2 == 0 { &owner2 } else { &owner1 };
+            let sensor = json!({
+                "type": "test",
+                "location": format!("Zone {}", i),
+            });
+            contract.submit_sensor(sensor).call(sender).unwrap();
+        }
+
+        // Query sensors owned by owner1
+        let result_owner1 = contract
+            .list_sensors(None, Some(10), Some(owner1.clone()), None)
+            .unwrap();
+
+        assert_eq!(result_owner1.len(), 3);
+        assert!(result_owner1.iter().all(|s| s.owner == owner1));
+
+        // Query sensors owned by owner2
+        let result_owner2 = contract
+            .list_sensors(None, Some(10), Some(owner2.clone()), None)
+            .unwrap();
+
+        assert_eq!(result_owner2.len(), 2);
+        assert!(result_owner2.iter().all(|s| s.owner == owner2));
+    }
+
+    #[test]
+    fn integration_list_sensors_pagination_edge_cases_and_filters() {
+        let app = App::default();
+        let code_id = CodeId::store_code(&app);
+        let admin = "admin".into_addr();
+        let submitter = "submitter".into_addr();
+
+        let contract = code_id
+            .instantiate(Some(DEFAULT_DENOM.to_string()))
+            .call(&admin)
+            .unwrap();
+
+        for i in 0..5 {
+            let sensor = json!({ "name": format!("Sensor{}", i), "location": format!("Loc{}", i) });
+            contract.submit_sensor(sensor).call(&submitter).unwrap();
+        }
+
+        // Manually activate sensor 1 and 3
+        contract.activate(1).call(&admin).unwrap();
+        contract.activate(3).call(&admin).unwrap();
+
+        // Pagination case: zero limit
+        let result = contract.list_sensors(None, Some(0), None, None).unwrap();
+        assert!(result.is_empty());
+
+        // Pagination case: start after last element
+        let result = contract
+            .list_sensors(Some(5), Some(10), None, None)
+            .unwrap();
+        assert!(result.is_empty());
+
+        // Pagination case: limit greater than remaining
+        let result = contract
+            .list_sensors(Some(2), Some(10), None, None)
+            .unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].id, 3);
+        assert_eq!(result[2].id, 5);
+
+        // Filter by status: only Active
+        let result = contract
+            .list_sensors(None, Some(10), None, Some(SensorStatus::Active))
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|s| s.status == SensorStatus::Active));
+
+        // Filter by owner + status
+        let result = contract
+            .list_sensors(
+                None,
+                Some(10),
+                Some(submitter.clone()),
+                Some(SensorStatus::Active),
+            )
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(
+            result
+                .iter()
+                .all(|s| s.owner == submitter && s.status == SensorStatus::Active)
+        );
     }
 
     #[test]

@@ -17,6 +17,6 @@ impl fmt::Display for SensorStatus {
             SensorStatus::Active => "Active",
             SensorStatus::Inactive => "Inactive",
         };
-        write!(f, "{}", status_str)
+        write!(f, "{status_str}")
     }
 }
