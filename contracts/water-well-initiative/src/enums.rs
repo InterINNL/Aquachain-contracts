@@ -23,6 +23,6 @@ impl fmt::Display for ProjectStatus {
             ProjectStatus::Completed => "completed",
             ProjectStatus::Cancelled => "cancelled",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }

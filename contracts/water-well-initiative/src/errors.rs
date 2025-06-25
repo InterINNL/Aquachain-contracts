@@ -9,7 +9,7 @@ pub enum ContractError {
     #[error("Goal must be greater than zero")]
     ZeroGoal,
 
-    #[error("Duplicate data entry")]
+    #[error("Duplicate entry")]
     DuplicateData,
 
     #[error("Data is not valid json")]

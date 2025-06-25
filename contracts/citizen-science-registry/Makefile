@@ -251,7 +251,7 @@ flow:
 	$(MAKE) install || exit 1
 
 	@echo "\n==> Submit new sensor"
-	data='{"longitude":25,"latitude":60}' $(MAKE) submit-sensor || exit 1
+	data='{"location":{"description":"test","lat":"56"…ng":"78"},"model":"test","type":"WaterQuality"}' $(MAKE) submit-sensor || exit 1
 
 	@sleep 5
 	@echo "\n==> Activate sensor 1"

@@ -271,7 +271,7 @@ impl WaterWellInitiativeContract {
 
         let sender = &ctx.info.sender;
         let admin = ADMIN.load(ctx.deps.storage)?;
-        if sender != &project.owner && sender != &admin {
+        if sender != project.owner && sender != admin {
             return Err(ContractError::Unauthorized.into());
         }
 

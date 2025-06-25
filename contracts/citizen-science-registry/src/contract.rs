@@ -1,6 +1,6 @@
 use crate::constants::{
-    ADMIN, DATA_ENTRIES, DATA_HASHES, DEFAULT_DENOM, DENOM, NEXT_ENTRY_ID, NEXT_SENSOR_ID, SENSORS,
-    VERIFIERS,
+    ADMIN, DATA_ENTRIES, DATA_HASHES, DEFAULT_DENOM, DENOM, NEXT_ENTRY_ID, NEXT_SENSOR_ID,
+    SENSOR_HASHES, SENSORS, VERIFIERS,
 };
 use crate::enums::SensorStatus;
 use crate::errors::ContractError;
@@ -20,6 +20,8 @@ pub struct Sensor {
     pub owner: Addr,
     pub data_str: String,
     pub status: SensorStatus,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
 #[cw_serde]
@@ -31,6 +33,8 @@ pub struct DataEntry {
     pub verified: bool,
     pub verifier: Option<Addr>,
     pub rewarded: bool,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
 pub struct CitizenScienceRegistry;
@@ -59,6 +63,7 @@ impl CitizenScienceRegistry {
 
     #[sv::msg(exec)]
     fn submit_sensor(&self, ctx: ExecCtx, data: Value) -> StdResult<Response> {
+        // Reject empty values
         match &data {
             Value::String(s) if s.is_empty() => {
                 return Err(ContractError::InvalidJson.into());
@@ -72,25 +77,44 @@ impl CitizenScienceRegistry {
             _ => {}
         }
 
-        // Serialize JSON value to string (to store/hash it)
+        // Serialize JSON value to string
         let data_str = serde_json::to_string(&data).map_err(|_| ContractError::InvalidJson)?;
 
+        // Compute SHA-256 hash of the data string
+        let mut hasher = Sha256::new();
+        hasher.update(data_str.as_bytes());
+        let data_hash_bytes = hasher.finalize();
+        let data_hash = hex::encode(data_hash_bytes);
+
+        // Check if sensor with the same hash already exists
+        if SENSOR_HASHES
+            .may_load(ctx.deps.storage, data_hash.clone())?
+            .unwrap_or(false)
+        {
+            return Err(ContractError::DuplicateData.into());
+        }
+
         let id = NEXT_SENSOR_ID.load(ctx.deps.storage)?;
+        let block_time = ctx.env.block.time.seconds();
 
         let sensor = Sensor {
             id,
             owner: ctx.info.sender.clone(),
-            data_str,
+            data_str: data_str.clone(),
             status: SensorStatus::Proposed,
+            created_at: block_time,
+            updated_at: block_time,
         };
 
         SENSORS.save(ctx.deps.storage, id, &sensor)?;
+        SENSOR_HASHES.save(ctx.deps.storage, data_hash.clone(), &true)?;
         NEXT_SENSOR_ID.save(ctx.deps.storage, &(id + 1))?;
 
         Ok(Response::new()
             .add_attribute("action", "submit_sensor")
             .add_attribute("sensor_id", id.to_string())
-            .add_attribute("owner", ctx.info.sender.to_string()))
+            .add_attribute("owner", ctx.info.sender.to_string())
+            .add_attribute("sensor_hash", data_hash))
     }
 
     #[sv::msg(exec)]
@@ -101,11 +125,12 @@ impl CitizenScienceRegistry {
         }
 
         let mut sensor = SENSORS.load(ctx.deps.storage, sensor_id)?;
-        if !matches!(sensor.status, SensorStatus::Proposed) {
+        if matches!(sensor.status, SensorStatus::Active) {
             return Err(ContractError::AlreadyActivated.into());
         }
 
         sensor.status = SensorStatus::Active;
+        sensor.updated_at = ctx.env.block.time.seconds();
         SENSORS.save(ctx.deps.storage, sensor_id, &sensor)?;
 
         Ok(Response::new()
@@ -121,11 +146,32 @@ impl CitizenScienceRegistry {
         }
 
         let mut sensor = SENSORS.load(ctx.deps.storage, sensor_id)?;
+        if matches!(sensor.status, SensorStatus::Inactive) {
+            return Err(ContractError::AlreadyDeactivated.into());
+        }
+
         sensor.status = SensorStatus::Inactive;
+        sensor.updated_at = ctx.env.block.time.seconds();
         SENSORS.save(ctx.deps.storage, sensor_id, &sensor)?;
 
         Ok(Response::new()
             .add_attribute("action", "deactivate")
+            .add_attribute("sensor_id", sensor_id.to_string()))
+    }
+
+    #[sv::msg(exec)]
+    fn delete(&self, ctx: ExecCtx, sensor_id: u64) -> StdResult<Response> {
+        let admin = ADMIN.load(ctx.deps.storage)?;
+        if ctx.info.sender != admin {
+            return Err(ContractError::Unauthorized.into());
+        }
+
+        SENSORS.load(ctx.deps.storage, sensor_id)?;
+
+        SENSORS.remove(ctx.deps.storage, sensor_id);
+
+        Ok(Response::new()
+            .add_attribute("action", "delete")
             .add_attribute("sensor_id", sensor_id.to_string()))
     }
 
@@ -181,16 +227,18 @@ impl CitizenScienceRegistry {
         hasher.update(data_str.as_bytes());
         let data_hash_bytes = hasher.finalize();
         let data_hash = hex::encode(data_hash_bytes);
+        let hash_key = (sensor_id, data_hash.clone());
 
         // Check for duplicate data by looking up the hash
         if DATA_HASHES
-            .may_load(ctx.deps.storage, data_hash.clone())?
+            .may_load(ctx.deps.storage, hash_key.clone())?
             .unwrap_or(false)
         {
             return Err(ContractError::DuplicateData.into());
         }
 
         let id = NEXT_ENTRY_ID.load(ctx.deps.storage)?;
+        let block_time = ctx.env.block.time.seconds();
 
         let entry = DataEntry {
             id,
@@ -200,10 +248,12 @@ impl CitizenScienceRegistry {
             verified: false,
             verifier: None,
             rewarded: false,
+            created_at: block_time,
+            updated_at: block_time,
         };
 
         DATA_ENTRIES.save(ctx.deps.storage, id, &entry)?;
-        DATA_HASHES.save(ctx.deps.storage, data_hash.clone(), &true)?;
+        DATA_HASHES.save(ctx.deps.storage, hash_key, &true)?;
         NEXT_ENTRY_ID.save(ctx.deps.storage, &(id + 1))?;
 
         Ok(Response::new()
@@ -229,12 +279,15 @@ impl CitizenScienceRegistry {
 
         entry.verified = true;
         entry.verifier = Some(ctx.info.sender.clone());
+        entry.updated_at = ctx.env.block.time.seconds(); // Update timestamp here
+
         DATA_ENTRIES.save(ctx.deps.storage, entry_id, &entry)?;
 
         Ok(Response::new()
             .add_attribute("action", "verify_data")
             .add_attribute("entry_id", entry_id.to_string())
-            .add_attribute("verifier", ctx.info.sender.to_string()))
+            .add_attribute("submitter", entry.submitter.to_string())
+            .add_attribute("verifier", ctx.info.sender.clone()))
     }
 
     #[sv::msg(exec)]
@@ -280,6 +333,7 @@ impl CitizenScienceRegistry {
             .add_message(send_msg)
             .add_attribute("action", "reward_submitter")
             .add_attribute("entry_id", entry_id.to_string())
+            .add_attribute("sender", sender.to_string())
             .add_attribute("recipient", entry.submitter.to_string())
             .add_attribute("amount", reward_amount.to_string()))
     }
@@ -295,41 +349,105 @@ impl CitizenScienceRegistry {
     }
 
     #[sv::msg(query)]
+    fn count_sensors(
+        &self,
+        ctx: QueryCtx,
+        owner: Option<Addr>,
+        status: Option<SensorStatus>,
+    ) -> StdResult<u64> {
+        let count = SENSORS
+            .range(ctx.deps.storage, None, None, Order::Ascending)
+            .filter_map(|item| match item {
+                Ok((_, sensor)) => {
+                    if let Some(o) = &owner
+                        && sensor.owner != *o
+                    {
+                        return None;
+                    }
+
+                    if let Some(s) = &status
+                        && &sensor.status != s
+                    {
+                        return None;
+                    }
+
+                    Some(())
+                }
+                Err(_) => None,
+            })
+            .count() as u64;
+
+        Ok(count)
+    }
+
+    #[sv::msg(query)]
     fn list_sensors(
         &self,
         ctx: QueryCtx,
         start_after: Option<u64>,
         limit: Option<u32>,
-        owner: Option<Addr>,          // ✅ filter by owner
-        status: Option<SensorStatus>, // ✅ new filter by status
+        owner: Option<Addr>,
+        status: Option<SensorStatus>,
     ) -> StdResult<Vec<Sensor>> {
         let limit = limit.unwrap_or(10).min(30) as usize;
         let start = start_after.map(Bound::exclusive);
 
-        SENSORS
+        let mut sensors: Vec<Sensor> = SENSORS
             .range(ctx.deps.storage, start, None, Order::Ascending)
             .filter_map(|item| match item {
                 Ok((_, sensor)) => {
-                    // Filter by owner if specified
-                    if let Some(ref o) = owner {
-                        if sensor.owner != *o {
-                            return None;
-                        }
+                    if let Some(o) = &owner
+                        && sensor.owner != o
+                    {
+                        return None;
                     }
 
-                    // Filter by status if specified
-                    if let Some(ref s) = status {
-                        if &sensor.status != s {
-                            return None;
-                        }
+                    if let Some(s) = &status
+                        && &sensor.status != s
+                    {
+                        return None;
                     }
 
                     Some(Ok(sensor))
                 }
                 Err(e) => Some(Err(e)),
             })
-            .take(limit)
-            .collect()
+            .collect::<StdResult<Vec<Sensor>>>()?;
+
+        // Sort by `updated_at` descending
+        sensors.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+        Ok(sensors.into_iter().take(limit).collect())
+    }
+
+    #[sv::msg(query)]
+    fn count_data_entries(
+        &self,
+        ctx: QueryCtx,
+        submitter: Option<Addr>,
+        sensor_id: Option<u64>,
+    ) -> StdResult<u64> {
+        let count = DATA_ENTRIES
+            .range(ctx.deps.storage, None, None, Order::Ascending)
+            .filter_map(|item| match item {
+                Ok((_, entry)) => {
+                    if let Some(s) = &submitter
+                        && entry.submitter != s
+                    {
+                        return None;
+                    }
+                    if let Some(id) = sensor_id
+                        && entry.sensor_id != id
+                    {
+                        return None;
+                    }
+                    Some(()) // Count this entry
+                }
+                Err(_) => None,
+            })
+            .count() as u64;
+
+        Ok(count)
     }
 
     #[sv::msg(query)]
@@ -338,15 +456,40 @@ impl CitizenScienceRegistry {
         ctx: QueryCtx,
         start_after: Option<u64>,
         limit: Option<u32>,
+        submitter: Option<Addr>,
+        sensor_id: Option<u64>,
     ) -> StdResult<Vec<DataEntry>> {
         let limit = limit.unwrap_or(10).min(30) as usize;
         let start = start_after.map(Bound::exclusive);
 
-        DATA_ENTRIES
+        let mut entries: Vec<DataEntry> = DATA_ENTRIES
             .range(ctx.deps.storage, start, None, Order::Ascending)
-            .take(limit)
-            .map(|item| item.map(|(_, e)| e))
-            .collect()
+            .filter_map(|item| match item {
+                Ok((_, entry)) => {
+                    // Filter by submitter if specified
+                    if let Some(submitter) = &submitter
+                        && entry.submitter != submitter
+                    {
+                        return None;
+                    }
+
+                    // Filter by sensor_id if specified
+                    if let Some(id) = sensor_id
+                        && entry.sensor_id != id
+                    {
+                        return None;
+                    }
+
+                    Some(Ok(entry))
+                }
+                Err(e) => Some(Err(e)),
+            })
+            .collect::<StdResult<Vec<DataEntry>>>()?;
+
+        // Sort by `created_at` descending
+        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        Ok(entries.into_iter().take(limit).collect())
     }
 
     #[sv::msg(query)]
@@ -529,12 +672,14 @@ pub mod tests {
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
 
-        let sensor_json = serde_json::json!({"name": "owner test"});
+        let sensor_json = serde_json::json!({"name": "owner 1 test"});
 
         // user1 submits a sensor
         let exec_ctx_user1 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user1, &[])));
         let res1 = contract.submit_sensor(exec_ctx_user1, sensor_json.clone());
         assert!(res1.is_ok());
+
+        let sensor_json = serde_json::json!({"name": "owner 2 test"});
 
         // user2 submits a sensor
         let exec_ctx_user2 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user2, &[])));
@@ -554,6 +699,42 @@ pub mod tests {
     }
 
     #[test]
+    fn submit_sensor_fails_on_duplicate_data() {
+        let user = Addr::unchecked("alice");
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        // Instantiate the contract
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Prepare identical sensor data
+        let sensor_json = serde_json::json!({"model": "abc-1", "type": "air"});
+
+        // First submission should succeed
+        let exec_ctx1 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
+        let result1 = contract.submit_sensor(exec_ctx1, sensor_json.clone());
+        assert!(result1.is_ok());
+
+        // Second submission with same data should fail (duplicate)
+        let exec_ctx2 = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
+        let result2 = contract.submit_sensor(exec_ctx2, sensor_json.clone());
+
+        assert!(
+            result2.is_err(),
+            "Expected error on duplicate sensor submission"
+        );
+
+        let error = result2.unwrap_err().to_string();
+        assert!(
+            error.contains("Duplicate entry"),
+            "Expected DuplicateData error, got: {error}"
+        );
+    }
+
+    #[test]
     fn activate_sensor_succeeds_for_admin_and_proposed_sensor() {
         let admin = Addr::unchecked("admin");
         let user = Addr::unchecked("user");
@@ -563,6 +744,9 @@ pub mod tests {
 
         // Instantiate contract with admin
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -573,6 +757,8 @@ pub mod tests {
             owner: user.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Proposed,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -596,6 +782,8 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -606,6 +794,8 @@ pub mod tests {
             owner: user.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Proposed,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -629,6 +819,8 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -639,6 +831,8 @@ pub mod tests {
             owner: user.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -684,6 +878,7 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -694,6 +889,8 @@ pub mod tests {
             owner: user.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -717,6 +914,7 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -727,6 +925,8 @@ pub mod tests {
             owner: user.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -760,6 +960,148 @@ pub mod tests {
         assert!(
             err.to_string().contains("not found"),
             "Expected NotFound error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn delete_sensor_succeeds_for_admin() {
+        let admin = Addr::unchecked("admin");
+        let user = Addr::unchecked("user");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
+
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let sensor = Sensor {
+            id: 1,
+            owner: user.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Proposed,
+            created_at: now,
+            updated_at: now,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // Admin deletes it
+        let delete_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let res = contract.delete(delete_ctx, 1);
+        assert!(res.is_ok(), "Expected delete to succeed for admin");
+
+        // Should not be found anymore
+        let sensor_result = SENSORS.may_load(deps.as_ref().storage, 1).unwrap();
+        assert!(sensor_result.is_none(), "Sensor should be deleted");
+    }
+
+    #[test]
+    fn delete_sensor_fails_for_non_admin() {
+        let admin = Addr::unchecked("admin");
+        let user = Addr::unchecked("user");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
+
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let sensor = Sensor {
+            id: 1,
+            owner: user.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Proposed,
+            created_at: now,
+            updated_at: now,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // Non-admin tries to delete
+        let non_admin_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
+        let err = contract.delete(non_admin_ctx, 1).unwrap_err();
+
+        assert!(
+            err.to_string().contains("Unauthorized"),
+            "Expected Unauthorized error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn delete_sensor_fails_if_sensor_not_found() {
+        let admin = Addr::unchecked("admin");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Admin tries to delete non-existent sensor
+        let delete_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let err = contract.delete(delete_ctx, 999).unwrap_err();
+
+        assert!(
+            err.to_string().contains("not found"),
+            "Expected not found error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn delete_sensor_removes_exactly_one() {
+        let admin = Addr::unchecked("admin");
+        let user = Addr::unchecked("user");
+
+        let contract = CitizenScienceRegistry::new();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
+
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Insert two sensors
+        for id in 1..=2 {
+            let sensor = Sensor {
+                id,
+                owner: user.clone(),
+                data_str: "dummy".to_string(),
+                status: SensorStatus::Proposed,
+                created_at: now,
+                updated_at: now,
+            };
+            SENSORS.save(deps.as_mut().storage, id, &sensor).unwrap();
+        }
+
+        // Admin deletes sensor 1
+        let delete_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let res = contract.delete(delete_ctx, 1);
+        assert!(res.is_ok(), "Expected delete to succeed");
+
+        // Sensor 1 gone
+        assert!(
+            SENSORS
+                .may_load(deps.as_ref().storage, 1)
+                .unwrap()
+                .is_none()
+        );
+
+        // Sensor 2 still present
+        assert!(
+            SENSORS
+                .may_load(deps.as_ref().storage, 2)
+                .unwrap()
+                .is_some()
         );
     }
 
@@ -896,6 +1238,7 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -906,6 +1249,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -936,6 +1281,7 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -946,6 +1292,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -963,6 +1311,40 @@ pub mod tests {
     }
 
     #[test]
+    fn submit_data_allowed_for_different_sensors() {
+        let contract = CitizenScienceRegistry::new();
+        let user = "user".into_addr();
+        let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
+        let now = ctx.env.block.time.seconds();
+
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for id in [1, 2] {
+            let sensor = Sensor {
+                id,
+                owner: user.clone(),
+                data_str: "dummy".to_string(),
+                status: SensorStatus::Active,
+                created_at: now,
+                updated_at: now,
+            };
+            SENSORS.save(deps.as_mut().storage, id, &sensor).unwrap();
+        }
+
+        let json_data = serde_json::json!({ "temp": 25 });
+
+        for sensor_id in [1, 2] {
+            let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&user, &[])));
+            let result = contract.submit_data(exec_ctx, sensor_id, json_data.clone());
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
     fn submit_data_fails_for_inactive_sensor() {
         let admin = "admin".into_addr();
         let submitter = "submitter".into_addr();
@@ -971,6 +1353,7 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -981,6 +1364,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Inactive,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1060,6 +1445,7 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1070,6 +1456,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1098,6 +1486,7 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1114,6 +1503,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1177,12 +1568,14 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
 
         let add_verifier_ctx =
             ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
         contract
             .add_verifier(add_verifier_ctx, verifier.clone())
             .unwrap();
@@ -1193,6 +1586,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1236,6 +1631,7 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+        let now = ctx.env.block.time.seconds();
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1246,6 +1642,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1275,6 +1673,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1282,6 +1683,7 @@ pub mod tests {
         // Add verifier
         let add_verifier_ctx =
             ExecCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
         contract
             .add_verifier(add_verifier_ctx, verifier.clone())
             .unwrap();
@@ -1292,6 +1694,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1334,6 +1738,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1351,6 +1758,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1381,6 +1790,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1398,6 +1810,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1459,6 +1873,9 @@ pub mod tests {
 
         // Instantiate contract
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1476,6 +1893,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1515,7 +1934,13 @@ pub mod tests {
     #[test]
     fn get_sensor_returns_existing_sensor() {
         let contract = CitizenScienceRegistry::new();
+        let admin = "admin".into_addr();
+
         let mut deps = mock_dependencies();
+
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        let now = ctx.env.block.time.seconds();
 
         // Prepopulate a sensor in storage
         let sensor = Sensor {
@@ -1523,6 +1948,8 @@ pub mod tests {
             owner: Addr::unchecked("user"),
             data_str: "{\"type\": \"temp\"}".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1586,6 +2013,8 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1596,6 +2025,8 @@ pub mod tests {
                 owner: owner.clone(),
                 data_str: format!("{{\"sensor\": {i}}}"),
                 status: SensorStatus::Proposed,
+                created_at: now,
+                updated_at: now,
             };
             SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
         }
@@ -1624,6 +2055,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1634,6 +2068,8 @@ pub mod tests {
                 owner: owner.clone(),
                 data_str: "some data".to_string(),
                 status: SensorStatus::Proposed,
+                created_at: now,
+                updated_at: now,
             };
             SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
         }
@@ -1653,6 +2089,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1663,6 +2102,8 @@ pub mod tests {
                 owner: owner.clone(),
                 data_str: format!("{{\"sensor\": {i}}}"),
                 status: SensorStatus::Active,
+                created_at: now,
+                updated_at: now,
             };
             SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
         }
@@ -1682,6 +2123,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1692,6 +2136,8 @@ pub mod tests {
                 owner: owner.clone(),
                 data_str: format!("{{\"sensor\": {i}}}"),
                 status: SensorStatus::Proposed,
+                created_at: now,
+                updated_at: now,
             };
             SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
         }
@@ -1711,6 +2157,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1721,6 +2170,8 @@ pub mod tests {
                 owner: owner.clone(),
                 data_str: format!("{{\"sensor\": {i}}}"),
                 status: SensorStatus::Active,
+                created_at: now,
+                updated_at: now,
             };
             SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
         }
@@ -1743,6 +2194,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner1, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1758,6 +2212,8 @@ pub mod tests {
                 },
                 data_str: format!("{{\"sensor\": {i}}}"),
                 status: SensorStatus::Active,
+                created_at: now,
+                updated_at: now,
             };
             SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
         }
@@ -1786,6 +2242,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1801,6 +2260,8 @@ pub mod tests {
                 owner: owner.clone(),
                 data_str: format!("{{\"sensor\": {i}}}"),
                 status,
+                created_at: now,
+                updated_at: now,
             };
             SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
         }
@@ -1844,6 +2305,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner1, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1860,6 +2324,8 @@ pub mod tests {
                 owner: owner.clone(),
                 data_str: format!("{{\"sensor\": {i}}}"),
                 status,
+                created_at: now,
+                updated_at: now,
             };
             SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
         }
@@ -1881,6 +2347,57 @@ pub mod tests {
     }
 
     #[test]
+    fn count_sensors_by_owner_and_status() {
+        let contract = CitizenScienceRegistry::new();
+        let owner1 = "owner1".into_addr();
+        let owner2 = "owner2".into_addr();
+        let mut deps = mock_dependencies();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&owner1, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for i in 1..=5 {
+            let owner = if i <= 3 { &owner1 } else { &owner2 };
+            let status = if i % 2 == 0 {
+                SensorStatus::Proposed
+            } else {
+                SensorStatus::Active
+            };
+            let sensor = Sensor {
+                id: i,
+                owner: owner.clone(),
+                data_str: format!("{{\"sensor\": {i}}}"),
+                status,
+                created_at: now,
+                updated_at: now,
+            };
+            SENSORS.save(deps.as_mut().storage, i, &sensor).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+
+        let total = contract.count_sensors(query_ctx, None, None).unwrap();
+        assert_eq!(total, 5);
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let owner1_total = contract
+            .count_sensors(query_ctx, Some(owner1.clone()), None)
+            .unwrap();
+        assert_eq!(owner1_total, 3);
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+
+        let owner2_active = contract
+            .count_sensors(query_ctx, Some(owner2.clone()), Some(SensorStatus::Active))
+            .unwrap();
+        assert_eq!(owner2_active, 1);
+    }
+
+    #[test]
     fn get_data_entry_success() {
         let admin = "admin".into_addr();
         let submitter = "submitter".into_addr();
@@ -1889,6 +2406,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1899,6 +2419,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1958,7 +2480,9 @@ pub mod tests {
             .unwrap();
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
-        let result = contract.list_data_entries(query_ctx, None, None).unwrap();
+        let result = contract
+            .list_data_entries(query_ctx, None, None, None, None)
+            .unwrap();
 
         assert_eq!(result.len(), 0);
     }
@@ -1970,6 +2494,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -1980,6 +2507,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -1993,7 +2522,7 @@ pub mod tests {
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
         let first_page = contract
-            .list_data_entries(query_ctx, None, Some(2))
+            .list_data_entries(query_ctx, None, Some(2), None, None)
             .unwrap();
         assert_eq!(first_page.len(), 2);
         assert_eq!(first_page[0].id, 1);
@@ -2001,7 +2530,7 @@ pub mod tests {
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
         let second_page = contract
-            .list_data_entries(query_ctx, Some(2), Some(2))
+            .list_data_entries(query_ctx, Some(2), Some(2), None, None)
             .unwrap();
         assert_eq!(second_page.len(), 2);
         assert_eq!(second_page[0].id, 3);
@@ -2015,6 +2544,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -2025,6 +2557,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -2038,7 +2572,7 @@ pub mod tests {
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
         let result = contract
-            .list_data_entries(query_ctx, Some(3), Some(5))
+            .list_data_entries(query_ctx, Some(3), Some(5), None, None)
             .unwrap();
 
         assert_eq!(result.len(), 0);
@@ -2051,6 +2585,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -2061,6 +2598,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -2074,7 +2613,7 @@ pub mod tests {
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
         let result = contract
-            .list_data_entries(query_ctx, None, Some(999))
+            .list_data_entries(query_ctx, None, Some(999), None, None)
             .unwrap();
 
         assert_eq!(result.len(), 30);
@@ -2087,6 +2626,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -2097,6 +2639,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -2109,7 +2653,9 @@ pub mod tests {
         }
 
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
-        let result = contract.list_data_entries(query_ctx, None, None).unwrap();
+        let result = contract
+            .list_data_entries(query_ctx, None, None, None, None)
+            .unwrap();
 
         assert_eq!(result.len(), 10);
     }
@@ -2123,6 +2669,9 @@ pub mod tests {
         let mut deps = mock_dependencies();
 
         let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&admin, &[])));
+
+        let now = ctx.env.block.time.seconds();
+
         contract
             .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
             .unwrap();
@@ -2133,6 +2682,8 @@ pub mod tests {
             owner: submitter.clone(),
             data_str: "dummy".to_string(),
             status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
         };
         SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
 
@@ -2148,12 +2699,209 @@ pub mod tests {
         // Query entries
         let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
         let entries = contract
-            .list_data_entries(query_ctx, None, Some(10))
+            .list_data_entries(query_ctx, None, Some(10), None, None)
             .unwrap();
 
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].id, 1);
         assert_eq!(entries[2].id, 3);
+    }
+
+    #[test]
+    fn list_data_entries_by_sensor_id_only() {
+        let contract = CitizenScienceRegistry::new();
+        let submitter = "submitter".into_addr();
+        let mut deps = mock_dependencies();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+        let now = ctx.env.block.time.seconds();
+
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        // Add 2 sensors
+        for id in 1..=2 {
+            let sensor = Sensor {
+                id,
+                owner: submitter.clone(),
+                data_str: format!("dummy{id}").to_string(),
+                status: SensorStatus::Active,
+                created_at: now,
+                updated_at: now,
+            };
+            SENSORS.save(deps.as_mut().storage, id, &sensor).unwrap();
+        }
+
+        // Submit 3 entries for sensor 1, 2 for sensor 2
+        for i in 0..3 {
+            let val: Value = serde_json::json!({ "entry": i });
+            let exec_ctx =
+                ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+            contract.submit_data(exec_ctx, 1, val).unwrap();
+        }
+        for i in 0..2 {
+            let val: Value = serde_json::json!({ "entry": i });
+            let exec_ctx =
+                ExecCtx::from((deps.as_mut(), mock_env(), message_info(&submitter, &[])));
+            contract.submit_data(exec_ctx, 2, val).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract
+            .list_data_entries(query_ctx, None, None, None, Some(2))
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|entry| entry.sensor_id == 2));
+    }
+
+    #[test]
+    fn list_data_entries_by_submitter_only() {
+        let contract = CitizenScienceRegistry::new();
+        let alice = "alice".into_addr();
+        let bob = "bob".into_addr();
+        let mut deps = mock_dependencies();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&alice, &[])));
+        let now = ctx.env.block.time.seconds();
+
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        let sensor = Sensor {
+            id: 1,
+            owner: alice.clone(),
+            data_str: "dummy".to_string(),
+            status: SensorStatus::Active,
+            created_at: now,
+            updated_at: now,
+        };
+        SENSORS.save(deps.as_mut().storage, 1, &sensor).unwrap();
+
+        // Alice submits 3 entries
+        for i in 0..3 {
+            let val: Value = serde_json::json!({ "entry": i });
+            let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&alice, &[])));
+            contract.submit_data(exec_ctx, 1, val).unwrap();
+        }
+
+        // Bob submits 2 entries
+        for i in 3..5 {
+            let val: Value = serde_json::json!({ "entry": i });
+            let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&bob, &[])));
+            contract.submit_data(exec_ctx, 1, val).unwrap();
+        }
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract
+            .list_data_entries(query_ctx, None, None, Some(bob.clone()), None)
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|entry| entry.submitter == bob));
+    }
+
+    #[test]
+    fn list_data_entries_by_sensor_id_and_submitter() {
+        let contract = CitizenScienceRegistry::new();
+        let alice = "alice".into_addr();
+        let bob = "bob".into_addr();
+        let mut deps = mock_dependencies();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&alice, &[])));
+        let now = ctx.env.block.time.seconds();
+
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for id in 1..=2 {
+            let sensor = Sensor {
+                id,
+                owner: alice.clone(),
+                data_str: "dummy".to_string(),
+                status: SensorStatus::Active,
+                created_at: now,
+                updated_at: now,
+            };
+            SENSORS.save(deps.as_mut().storage, id, &sensor).unwrap();
+        }
+
+        // Bob submits to sensor 1 and 2
+        for sensor_id in [1, 2] {
+            let val: Value = serde_json::json!({ "entry": sensor_id });
+            let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&bob, &[])));
+            contract.submit_data(exec_ctx, sensor_id, val).unwrap();
+        }
+
+        // Alice submits to sensor 1
+        let val: Value = serde_json::json!({ "entry": 99 });
+        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&alice, &[])));
+        contract.submit_data(exec_ctx, 1, val).unwrap();
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+        let result = contract
+            .list_data_entries(query_ctx, None, None, Some(bob.clone()), Some(1))
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].submitter, bob);
+        assert_eq!(result[0].sensor_id, 1);
+    }
+
+    #[test]
+    fn count_data_entries_by_submitter_and_sensor_id() {
+        let contract = CitizenScienceRegistry::new();
+        let alice = "alice".into_addr();
+        let bob = "bob".into_addr();
+        let mut deps = mock_dependencies();
+        let ctx = InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&alice, &[])));
+        let now = ctx.env.block.time.seconds();
+
+        contract
+            .instantiate(ctx, Some(DEFAULT_DENOM.to_string()))
+            .unwrap();
+
+        for id in 1..=2 {
+            let sensor = Sensor {
+                id,
+                owner: alice.clone(),
+                data_str: "dummy".to_string(),
+                status: SensorStatus::Active,
+                created_at: now,
+                updated_at: now,
+            };
+            SENSORS.save(deps.as_mut().storage, id, &sensor).unwrap();
+        }
+
+        // Bob submits 2 entries
+        for sensor_id in [1, 2] {
+            let val: Value = serde_json::json!({ "entry": sensor_id });
+            let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&bob, &[])));
+            contract.submit_data(exec_ctx, sensor_id, val).unwrap();
+        }
+
+        // Alice submits 1 entry to sensor 1
+        let val: Value = serde_json::json!({ "entry": 999 });
+        let exec_ctx = ExecCtx::from((deps.as_mut(), mock_env(), message_info(&alice, &[])));
+        contract.submit_data(exec_ctx, 1, val).unwrap();
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+
+        let total = contract.count_data_entries(query_ctx, None, None).unwrap();
+        assert_eq!(total, 3);
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+
+        let bob_entries = contract
+            .count_data_entries(query_ctx, Some(bob.clone()), None)
+            .unwrap();
+        assert_eq!(bob_entries, 2);
+
+        let query_ctx = QueryCtx::from((deps.as_ref(), mock_env()));
+
+        let alice_sensor1 = contract
+            .count_data_entries(query_ctx, Some(alice.clone()), Some(1))
+            .unwrap();
+        assert_eq!(alice_sensor1, 1);
     }
 
     #[test]

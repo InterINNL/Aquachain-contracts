@@ -83,6 +83,42 @@ mod tests {
     }
 
     #[test]
+    fn integration_submit_sensor_fails_on_duplicate() {
+        let app = App::default();
+        let code_id = CodeId::store_code(&app);
+        let admin = "admin".into_addr();
+        let user = "user".into_addr();
+        let contract = code_id
+            .instantiate(Some(DEFAULT_DENOM.to_string()))
+            .call(&admin)
+            .unwrap();
+
+        let sensor_data = json!({
+            "name": "Temperature Sensor",
+            "location": "Greenhouse 3",
+            "meta": { "model": "T-1000", "units": "Celsius" }
+        });
+
+        // First submission: should succeed
+        let res1 = contract.submit_sensor(sensor_data.clone()).call(&user);
+        assert!(res1.is_ok(), "First valid sensor data should be accepted");
+
+        let sensor = contract.get_sensor(1).unwrap();
+        assert_eq!(sensor.data_str, sensor_data.to_string());
+        assert_eq!(sensor.owner, user);
+
+        // Second submission with the same data: should fail (duplicate)
+        let res2 = contract.submit_sensor(sensor_data.clone()).call(&user);
+        assert!(res2.is_err(), "Duplicate sensor data should be rejected");
+
+        let error = res2.unwrap_err().to_string();
+        assert!(
+            error.contains("Duplicate entry"),
+            "Expected DuplicateData error, got: {error}"
+        );
+    }
+
+    #[test]
     fn integration_activate_sensor_once_only() {
         let app = App::default();
         let code_id = CodeId::store_code(&app);
@@ -178,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn integration_deactivate_sensor_twice_is_ok() {
+    fn integration_deactivate_sensor_twice_fails() {
         let app = App::default();
         let code_id = CodeId::store_code(&app);
         let admin = "admin".into_addr();
@@ -196,8 +232,84 @@ mod tests {
         // Second deactivate should succeed (idempotent)
         let res = contract.deactivate(1).call(&admin);
         assert!(
-            res.is_ok(),
+            res.is_err(),
             "Deactivating already inactive sensor should succeed"
+        );
+    }
+
+    #[test]
+    fn integration_delete_sensor_succeeds_for_admin() {
+        let app = App::default();
+        let code_id = CodeId::store_code(&app);
+        let admin = "admin".into_addr();
+        let submitter = "submitter".into_addr();
+
+        let contract = code_id
+            .instantiate(Some(DEFAULT_DENOM.to_string()))
+            .call(&admin)
+            .unwrap();
+
+        let sensor = json!({ "name": "sensor", "loc": "somewhere" });
+        contract.submit_sensor(sensor).call(&submitter).unwrap();
+
+        // Delete sensor as admin
+        let res = contract.delete(1).call(&admin);
+        assert!(res.is_ok(), "Admin should be able to delete sensor");
+
+        // Try activating deleted sensor, should fail
+        let res = contract.activate(1).call(&admin);
+        assert!(res.is_err(), "Deleted sensor should not exist");
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("not found"),
+            "Expected NotFound error after deletion, got: {err}"
+        );
+    }
+
+    #[test]
+    fn integration_delete_sensor_fails_for_non_admin() {
+        let app = App::default();
+        let code_id = CodeId::store_code(&app);
+        let admin = "admin".into_addr();
+        let user = "bob".into_addr();
+
+        let contract = code_id
+            .instantiate(Some(DEFAULT_DENOM.to_string()))
+            .call(&admin)
+            .unwrap();
+
+        let sensor = json!({ "name": "sensor", "loc": "there" });
+        contract.submit_sensor(sensor).call(&user).unwrap();
+
+        // Try to delete as non-admin
+        let res = contract.delete(1).call(&user);
+        assert!(res.is_err(), "Non-admin should not be able to delete");
+
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("Unauthorized"),
+            "Expected Unauthorized error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn integration_delete_sensor_fails_if_not_found() {
+        let app = App::default();
+        let code_id = CodeId::store_code(&app);
+        let admin = "admin".into_addr();
+
+        let contract = code_id
+            .instantiate(Some(DEFAULT_DENOM.to_string()))
+            .call(&admin)
+            .unwrap();
+
+        let res = contract.delete(999).call(&admin);
+        assert!(res.is_err(), "Deleting non-existent sensor should fail");
+
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("not found"),
+            "Expected NotFound error, got: {err}"
         );
     }
 
@@ -1164,7 +1276,9 @@ mod tests {
         }
 
         // Query all
-        let entries = contract.list_data_entries(None, Some(10)).unwrap();
+        let entries = contract
+            .list_data_entries(None, Some(10), None, None)
+            .unwrap();
         assert_eq!(entries.len(), 3);
         for (i, entry) in entries.iter().enumerate() {
             let expected_data_str = serde_json::to_string(
@@ -1178,7 +1292,9 @@ mod tests {
         }
 
         // Query with pagination (start_after = 1)
-        let entries_page = contract.list_data_entries(Some(1), Some(1)).unwrap();
+        let entries_page = contract
+            .list_data_entries(Some(1), Some(1), None, None)
+            .unwrap();
         assert_eq!(entries_page.len(), 1);
 
         let expected_data_str = serde_json::to_string(
@@ -1222,15 +1338,21 @@ mod tests {
         }
 
         // limit = 0 should return 0
-        let empty_page = contract.list_data_entries(None, Some(0)).unwrap();
+        let empty_page = contract
+            .list_data_entries(None, Some(0), None, None)
+            .unwrap();
         assert!(empty_page.is_empty());
 
         // start_after = last id should return 0
-        let end_page = contract.list_data_entries(Some(10), Some(10)).unwrap();
+        let end_page = contract
+            .list_data_entries(Some(10), Some(10), None, None)
+            .unwrap();
         assert!(end_page.is_empty());
 
         // limit > total should return all remaining
-        let page = contract.list_data_entries(Some(5), Some(10)).unwrap();
+        let page = contract
+            .list_data_entries(Some(5), Some(10), None, None)
+            .unwrap();
         assert_eq!(page.len(), 5);
     }
 
@@ -1256,7 +1378,9 @@ mod tests {
             contract.submit_data(1, entry).call(&user).unwrap();
         }
 
-        let result = contract.list_data_entries(None, Some(30)).unwrap();
+        let result = contract
+            .list_data_entries(None, Some(30), None, None)
+            .unwrap();
         assert_eq!(result.len(), 30);
     }
 
@@ -1293,11 +1417,129 @@ mod tests {
             .unwrap();
         contract.submit_data(1, entry2.clone()).call(&bob).unwrap();
 
-        let entries = contract.list_data_entries(None, Some(10)).unwrap();
+        let entries = contract
+            .list_data_entries(None, Some(10), None, None)
+            .unwrap();
         assert_eq!(entries.len(), 2);
 
         assert_eq!(entries[0].submitter, alice);
         assert_eq!(entries[1].submitter, bob);
+    }
+
+    #[test]
+    fn integration_list_data_entries_by_sensor_id_only() {
+        let app = App::default();
+        let code_id = CodeId::store_code(&app);
+        let admin = "admin".into_addr();
+        let submitter = "submitter".into_addr();
+        let contract = code_id
+            .instantiate(Some(DEFAULT_DENOM.to_string()))
+            .call(&admin)
+            .unwrap();
+
+        for i in 1..=2 {
+            let sensor_json = serde_json::json!({
+                "name": format!("sensor_{i}"),
+                "location": "location"
+            });
+            contract
+                .submit_sensor(sensor_json)
+                .call(&submitter)
+                .unwrap();
+            contract.activate(i).call(&admin).unwrap();
+        }
+
+        // Submit entries to each sensor
+        for i in 0..3 {
+            let entry = json!({ "entry": i });
+            contract.submit_data(1, entry).call(&submitter).unwrap();
+        }
+        for i in 0..2 {
+            let entry = json!({ "entry": i });
+            contract.submit_data(2, entry).call(&submitter).unwrap();
+        }
+
+        let result = contract
+            .list_data_entries(None, None, None, Some(2))
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|e| e.sensor_id == 2));
+    }
+
+    #[test]
+    fn integration_list_data_entries_by_submitter_only() {
+        let app = App::default();
+        let code_id = CodeId::store_code(&app);
+        let admin = "admin".into_addr();
+        let alice = "alice".into_addr();
+        let bob = "bob".into_addr();
+        let contract = code_id
+            .instantiate(Some(DEFAULT_DENOM.to_string()))
+            .call(&admin)
+            .unwrap();
+
+        // Register one sensor
+        let sensor_json = json!({ "name": "sensor", "location": "field" });
+        contract.submit_sensor(sensor_json).call(&alice).unwrap();
+        contract.activate(1).call(&admin).unwrap();
+
+        // Alice submits 3 entries
+        for i in 0..3 {
+            let entry = json!({ "entry": i });
+            contract.submit_data(1, entry).call(&alice).unwrap();
+        }
+
+        // Bob submits 2 entries
+        for i in 3..5 {
+            let entry = json!({ "entry": i });
+            contract.submit_data(1, entry).call(&bob).unwrap();
+        }
+
+        let result = contract
+            .list_data_entries(None, None, Some(bob.clone()), None)
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|e| e.submitter == bob));
+    }
+
+    #[test]
+    fn integration_list_data_entries_by_sensor_id_and_submitter() {
+        let app = App::default();
+        let code_id = CodeId::store_code(&app);
+        let admin = "admin".into_addr();
+        let alice = "alice".into_addr();
+        let bob = "bob".into_addr();
+        let contract = code_id
+            .instantiate(Some(DEFAULT_DENOM.to_string()))
+            .call(&admin)
+            .unwrap();
+
+        // Register and activate two sensors
+        for id in 1..=2 {
+            let sensor_json = json!({ "name": format!("sensor{id}"), "location": "spot" });
+            contract.submit_sensor(sensor_json).call(&alice).unwrap();
+            contract.activate(id).call(&admin).unwrap();
+        }
+
+        // Bob submits to both sensors
+        for sensor_id in [1, 2] {
+            let entry = json!({ "entry": sensor_id });
+            contract.submit_data(sensor_id, entry).call(&bob).unwrap();
+        }
+
+        // Alice submits to sensor 1
+        let entry = json!({ "entry": 99 });
+        contract.submit_data(1, entry).call(&alice).unwrap();
+
+        let result = contract
+            .list_data_entries(None, None, Some(bob.clone()), Some(1))
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].submitter, bob);
+        assert_eq!(result[0].sensor_id, 1);
     }
 
     #[test]

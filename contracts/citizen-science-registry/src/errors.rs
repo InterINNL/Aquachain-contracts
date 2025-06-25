@@ -9,7 +9,7 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized,
 
-    #[error("Duplicate data entry")]
+    #[error("Duplicate entry")]
     DuplicateData,
 
     #[error("Data entry already verified")]
@@ -29,6 +29,9 @@ pub enum ContractError {
 
     #[error("Sensor is already activated")]
     AlreadyActivated,
+
+    #[error("Sensor is already deactivated")]
+    AlreadyDeactivated,
 
     #[error("Sensor is not active")]
     SensorInactive,
