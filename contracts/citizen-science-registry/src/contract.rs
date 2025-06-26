@@ -356,7 +356,7 @@ impl CitizenScienceRegistry {
         status: Option<SensorStatus>,
     ) -> StdResult<u64> {
         let count = SENSORS
-            .range(ctx.deps.storage, None, None, Order::Ascending)
+            .range(ctx.deps.storage, None, None, Order::Descending)
             .filter_map(|item| match item {
                 Ok((_, sensor)) => {
                     if let Some(o) = &owner
@@ -392,8 +392,8 @@ impl CitizenScienceRegistry {
         let limit = limit.unwrap_or(10).min(30) as usize;
         let start = start_after.map(Bound::exclusive);
 
-        let mut sensors: Vec<Sensor> = SENSORS
-            .range(ctx.deps.storage, start, None, Order::Ascending)
+        let sensors: Vec<Sensor> = SENSORS
+            .range(ctx.deps.storage, None, start, Order::Descending)
             .filter_map(|item| match item {
                 Ok((_, sensor)) => {
                     if let Some(o) = &owner
@@ -414,9 +414,6 @@ impl CitizenScienceRegistry {
             })
             .collect::<StdResult<Vec<Sensor>>>()?;
 
-        // Sort by `updated_at` descending
-        sensors.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-
         Ok(sensors.into_iter().take(limit).collect())
     }
 
@@ -428,7 +425,7 @@ impl CitizenScienceRegistry {
         sensor_id: Option<u64>,
     ) -> StdResult<u64> {
         let count = DATA_ENTRIES
-            .range(ctx.deps.storage, None, None, Order::Ascending)
+            .range(ctx.deps.storage, None, None, Order::Descending)
             .filter_map(|item| match item {
                 Ok((_, entry)) => {
                     if let Some(s) = &submitter
@@ -462,8 +459,8 @@ impl CitizenScienceRegistry {
         let limit = limit.unwrap_or(10).min(30) as usize;
         let start = start_after.map(Bound::exclusive);
 
-        let mut entries: Vec<DataEntry> = DATA_ENTRIES
-            .range(ctx.deps.storage, start, None, Order::Ascending)
+        let entries: Vec<DataEntry> = DATA_ENTRIES
+            .range(ctx.deps.storage, None, start, Order::Descending)
             .filter_map(|item| match item {
                 Ok((_, entry)) => {
                     // Filter by submitter if specified
@@ -486,16 +483,13 @@ impl CitizenScienceRegistry {
             })
             .collect::<StdResult<Vec<DataEntry>>>()?;
 
-        // Sort by `created_at` descending
-        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-
         Ok(entries.into_iter().take(limit).collect())
     }
 
     #[sv::msg(query)]
     fn list_verifiers(&self, ctx: QueryCtx) -> StdResult<Vec<Addr>> {
         let verifiers: StdResult<Vec<_>> = VERIFIERS
-            .range(ctx.deps.storage, None, None, Order::Ascending)
+            .range(ctx.deps.storage, None, None, Order::Descending)
             .map(|item| item.map(|(addr, _)| addr))
             .collect();
         verifiers

@@ -352,7 +352,7 @@ impl WaterWellInitiativeContract {
         let start = start_after.map(Bound::exclusive);
 
         PROJECTS
-            .range(ctx.deps.storage, start, None, Order::Ascending)
+            .range(ctx.deps.storage, start, None, Order::Descending)
             .take(limit)
             .map(|item| item.map(|(_, p)| p))
             .collect()
@@ -394,7 +394,7 @@ impl WaterWellInitiativeContract {
         let start = start_after.map(Bound::exclusive);
 
         PROJECTS
-            .range(ctx.deps.storage, start, None, Order::Ascending)
+            .range(ctx.deps.storage, start, None, Order::Descending)
             .filter_map(|item| {
                 let (_, project) = item.ok()?;
                 if project.status == status {

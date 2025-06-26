@@ -65,10 +65,10 @@ install:
 	echo $$CONTRACT_ADDR > contract_addr.txt
 
 submit-sensor:
-	@DATA=$(data); \
+	@DATA='$(data)'; \
 	if [ -z "$$DATA" ]; then echo "Usage: make submit-sensor data='{\"key\":\"value\"}'"; exit 1; fi; \
 	CONTRACT_ADDR=$$(cat contract_addr.txt); \
-	MSG=$$(jq -n --arg data "$$DATA" '{ submit_sensor: { data: $$data } }'); \
+	MSG=$$(jq -n --arg data "$$DATA" '{ submit_sensor: { data: ($$data | fromjson) } }'); \
 	echo "Sending execute message: $$MSG"; \
 	TX_HASH=$$( \
 		wasmd tx wasm execute $$CONTRACT_ADDR "$$MSG" \
@@ -251,7 +251,7 @@ flow:
 	$(MAKE) install || exit 1
 
 	@echo "\n==> Submit new sensor"
-	data='{"location":{"description":"test","lat":"56"…ng":"78"},"model":"test","type":"WaterQuality"}' $(MAKE) submit-sensor || exit 1
+	$(MAKE) submit-sensor data='{"type":"Water Quality","model":"test","location":{"lat":"89","lng":"98","description":"Downtown"}}' || exit 1
 
 	@sleep 5
 	@echo "\n==> Activate sensor 1"
