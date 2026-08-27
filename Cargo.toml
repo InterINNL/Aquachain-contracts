@@ -2,6 +2,7 @@
 members = [
   "contracts/water-well-initiative",
   "contracts/citizen-science-registry",
+  "contracts/utility-water-footprint",
 ]
 resolver = "3"
 

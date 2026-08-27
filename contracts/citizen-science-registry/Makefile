@@ -1,7 +1,7 @@
 MAKEFLAGS += --no-print-directory
 
 build:
-	RUSTFLAGS="-C target-cpu=mvp" cargo +nightly build -Zbuild-std=panic_abort,std \
+	RUSTFLAGS="-C target-cpu=mvp -C link-arg=--allow-undefined" cargo +nightly build -Zbuild-std=panic_abort,std \
 		--target wasm32-unknown-unknown --release --lib
 
 # Generate JSON schema definitions

@@ -2,10 +2,11 @@
 
 CosmWasm (Sylvia) smart contracts for AquaChain water-management demos.
 
-| Contract | Crate | Role |
-| --- | --- | --- |
-| **citizen-science-registry** | `citizen_science_registry` | Sensors, data submissions, verifiers, rewards |
-| **water-well-initiative** | `water_well_initiative` | Funded water projects, donations, disbursement |
+| Contract                     | Crate                      | Role                                           |
+| ---------------------------- | -------------------------- | ---------------------------------------------- |
+| **citizen-science-registry** | `citizen_science_registry` | Sensors, data submissions, verifiers, rewards  |
+| **water-well-initiative**    | `water_well_initiative`    | Funded water projects, donations, disbursement |
+| **utility-water-footprint**  | `utility_water_footprint`  | Utility companies, usage logs, certificates    |
 
 Frontend: [InterINNL/Aquachain-frontend](https://github.com/InterINNL/Aquachain-frontend)
 
@@ -18,7 +19,7 @@ Frontend: [InterINNL/Aquachain-frontend](https://github.com/InterINNL/Aquachain-
 ## Build and test
 
 ```sh
-cd contracts/citizen-science-registry   # or water-well-initiative
+cd contracts/citizen-science-registry   # or water-well-initiative / utility-water-footprint
 make test
 make build
 make schema
@@ -30,14 +31,14 @@ WASM output:
 
 ## Local deploy (wasmd)
 
-Defaults in both Makefiles:
+Defaults in the contract Makefiles:
 
-| Variable | Default |
-| --- | --- |
-| `CHAIN_ID` | `testing` |
-| `NODE` | `http://localhost:26657` |
-| `DENOM` | `ustake` |
-| `KEY_NAME` | `greg` |
+| Variable   | Default                  |
+| ---------- | ------------------------ |
+| `CHAIN_ID` | `testing`                |
+| `NODE`     | `http://localhost:26657` |
+| `DENOM`    | `ustake`                 |
+| `KEY_NAME` | `greg`                   |
 
 ```sh
 # Start wasmd (Docker example from CosmWasm wasmd; fund a wasm1… Keplr address)
@@ -58,6 +59,10 @@ make deploy
 cd ../water-well-initiative
 make deploy
 # address → contract_addr.txt ; paste into frontend WaterWellContractAddress
+
+cd ../utility-water-footprint
+make deploy
+# address → contract_addr.txt ; paste into frontend UtilityWaterFootprintContractAddress
 ```
 
 Override network when needed:
