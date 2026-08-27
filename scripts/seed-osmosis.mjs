@@ -3,6 +3,7 @@
  * Seed demo activity on Osmosis citizen-science-registry.
  *
  *   MNEMONIC='…' CONTRACT=osmo1… node seed-osmosis.mjs
+ *   PRIVATE_KEY='…hex…' CONTRACT=osmo1… node seed-osmosis.mjs
  */
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +14,10 @@ const require = createRequire(
 );
 
 const { SigningCosmWasmClient } = require("@cosmjs/cosmwasm-stargate");
-const { DirectSecp256k1HdWallet } = require("@cosmjs/proto-signing");
+const {
+  DirectSecp256k1HdWallet,
+  DirectSecp256k1Wallet,
+} = require("@cosmjs/proto-signing");
 const { coins } = require("@cosmjs/amino");
 
 const RPC = process.env.RPC ?? "https://rpc.testnet.osmosis.zone";
@@ -27,15 +31,23 @@ const fee = {
   gas: "1500000",
 };
 
-const mnemonic = process.env.MNEMONIC?.trim();
-if (!mnemonic) {
-  console.error("Set MNEMONIC");
+async function loadWallet() {
+  const mnemonic = process.env.MNEMONIC?.trim();
+  if (mnemonic) {
+    return DirectSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "osmo" });
+  }
+  const privateKey = process.env.PRIVATE_KEY?.trim().replace(/^0x/i, "");
+  if (privateKey && /^[0-9a-fA-F]{64}$/.test(privateKey)) {
+    return DirectSecp256k1Wallet.fromKey(
+      Uint8Array.from(Buffer.from(privateKey, "hex")),
+      "osmo",
+    );
+  }
+  console.error("Set MNEMONIC or PRIVATE_KEY");
   process.exit(1);
 }
 
-const wallet = await DirectSecp256k1HdWallet.fromMnemonic(mnemonic, {
-  prefix: "osmo",
-});
+const wallet = await loadWallet();
 const [account] = await wallet.getAccounts();
 const client = await SigningCosmWasmClient.connectWithSigner(RPC, wallet);
 const me = account.address;

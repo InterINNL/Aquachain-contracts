@@ -71,6 +71,45 @@ Override network when needed:
 make deploy CHAIN_ID=… NODE=… DENOM=… KEY_NAME=…
 ```
 
+## Osmosis testnet deploy (`osmo-test-5`)
+
+Requires sibling frontend `node_modules` (`@cosmjs/*`). Auth: set `MNEMONIC` or `PRIVATE_KEY` (32-byte hex) for an `osmo1…` account with testnet OSMO.
+
+Build each crate first (`make build`), then from the contracts repo root:
+
+| Order | Label env                         | WASM artifact                                              | Frontend env key                        |
+| ----- | --------------------------------- | ---------------------------------------------------------- | --------------------------------------- |
+| 1     | `LABEL=citizen-science-registry`  | `target/wasm32-unknown-unknown/release/citizen_science_registry.wasm` | `CitizenScienceContractAddress` |
+| 2     | `LABEL=water-well-initiative`     | `…/water_well_initiative.wasm`                             | `WaterWellContractAddress`              |
+| 3     | `LABEL=utility-water-footprint`   | `…/utility_water_footprint.wasm`                           | `UtilityWaterFootprintContractAddress`  |
+
+```sh
+LABEL=water-well-initiative node scripts/deploy-osmosis.mjs \
+  target/wasm32-unknown-unknown/release/water_well_initiative.wasm
+```
+
+Paste each printed `contract` address into frontend `environment.prod.ts` (live) or `environment.ts` (local).
+
+Optional demo seeds (same auth env vars; optional `CONTRACT=osmo1…`):
+
+| Script                              | Module           |
+| ----------------------------------- | ---------------- |
+| `scripts/seed-osmosis.mjs`          | Citizen Science  |
+| `scripts/seed-water-well-osmosis.mjs` | Water Well     |
+| `scripts/seed-footprint-osmosis.mjs`  | Water Utilities |
+
+## Demo checklist (three modules)
+
+1. Deploy all three contracts (local wasmd **or** Osmosis as above).
+2. Set the three env keys in the frontend build that reviewers will open.
+3. Connect Keplr to the matching chain; fund the account.
+4. Smoke each path:
+   - **Citizen Science:** register sensor → activate → submit data → verify → reward
+   - **Water Well:** create → validate → donate → unlock → disburse
+   - **Water Utilities:** register company → log usage/savings → validate → issue certificate (≥10% validated savings ratio)
+
+Live demo: [interinnl.interchouette.net](https://interinnl.interchouette.net)
+
 ## License
 
 MIT
