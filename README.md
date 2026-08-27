@@ -53,7 +53,11 @@ docker run --rm -it -p 26657:26657 -p 26656:26656 -p 1317:1317 \
 
 cd contracts/citizen-science-registry
 make deploy
-# address → contract_addr.txt ; paste into frontend environment.ts
+# address → contract_addr.txt ; paste into frontend CitizenScienceContractAddress
+
+cd ../water-well-initiative
+make deploy
+# address → contract_addr.txt ; paste into frontend WaterWellContractAddress
 ```
 
 Override network when needed:
