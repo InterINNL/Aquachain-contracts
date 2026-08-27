@@ -4,6 +4,9 @@
  *
  * Usage:
  *   MNEMONIC='…' node deploy-osmosis.mjs [path-to.wasm]
+ *   PRIVATE_KEY='…hex…' node deploy-osmosis.mjs [path-to.wasm]
+ *
+ * Optional: LABEL=water-well-initiative
  *
  * Requires sibling frontend node_modules (@cosmjs/*).
  */
@@ -17,7 +20,10 @@ const require = createRequire(
 );
 
 const { SigningCosmWasmClient } = require("@cosmjs/cosmwasm-stargate");
-const { DirectSecp256k1HdWallet } = require("@cosmjs/proto-signing");
+const {
+  DirectSecp256k1HdWallet,
+  DirectSecp256k1Wallet,
+} = require("@cosmjs/proto-signing");
 
 const RPC = process.env.RPC ?? "https://rpc.testnet.osmosis.zone";
 const CHAIN_ID = process.env.CHAIN_ID ?? "osmo-test-5";
@@ -40,9 +46,21 @@ const defaultWasm = resolve(
 );
 const wasmPath = resolve(process.argv[2] ?? defaultWasm);
 
-const mnemonic = process.env.MNEMONIC?.trim();
-if (!mnemonic) {
-  console.error("Set MNEMONIC to the Keplr recover phrase (osmo1… account).");
+async function loadWallet() {
+  const mnemonic = process.env.MNEMONIC?.trim();
+  if (mnemonic) {
+    return DirectSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "osmo" });
+  }
+  const privateKey = process.env.PRIVATE_KEY?.trim().replace(/^0x/i, "");
+  if (privateKey && /^[0-9a-fA-F]{64}$/.test(privateKey)) {
+    return DirectSecp256k1Wallet.fromKey(
+      Uint8Array.from(Buffer.from(privateKey, "hex")),
+      "osmo",
+    );
+  }
+  console.error(
+    "Set MNEMONIC or PRIVATE_KEY (32-byte hex) for an osmo1… account.",
+  );
   process.exit(1);
 }
 
@@ -51,9 +69,7 @@ console.log(`Chain  ${CHAIN_ID}`);
 console.log(`RPC    ${RPC}`);
 console.log(`WASM   ${wasmPath} (${wasm.length} bytes)`);
 
-const wallet = await DirectSecp256k1HdWallet.fromMnemonic(mnemonic, {
-  prefix: "osmo",
-});
+const wallet = await loadWallet();
 const [account] = await wallet.getAccounts();
 console.log(`Signer ${account.address}`);
 
