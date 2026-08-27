@@ -393,7 +393,7 @@ impl CitizenScienceRegistry {
         let start = start_after.map(Bound::exclusive);
 
         let sensors: Vec<Sensor> = SENSORS
-            .range(ctx.deps.storage, None, start, Order::Descending)
+            .range(ctx.deps.storage, start, None, Order::Ascending)
             .filter_map(|item| match item {
                 Ok((_, sensor)) => {
                     if let Some(o) = &owner
@@ -460,7 +460,7 @@ impl CitizenScienceRegistry {
         let start = start_after.map(Bound::exclusive);
 
         let entries: Vec<DataEntry> = DATA_ENTRIES
-            .range(ctx.deps.storage, None, start, Order::Descending)
+            .range(ctx.deps.storage, start, None, Order::Ascending)
             .filter_map(|item| match item {
                 Ok((_, entry)) => {
                     // Filter by submitter if specified
