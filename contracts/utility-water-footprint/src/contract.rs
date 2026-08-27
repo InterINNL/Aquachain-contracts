@@ -1,5 +1,5 @@
 use crate::constants::{
-    ADMIN, CERTIFICATES, CERT_BY_COMPANY_PERIOD, COMPANIES, DEFAULT_DENOM, DENOM,
+    ADMIN, CERT_BY_COMPANY_PERIOD, CERTIFICATES, COMPANIES, DEFAULT_DENOM, DENOM,
     MIN_SAVINGS_RATIO_BPS, NEXT_CERT_ID, NEXT_COMPANY_ID, NEXT_LOG_ID, USAGE_LOGS, VERIFIERS,
 };
 use crate::errors::ContractError;
@@ -68,12 +68,7 @@ impl UtilityWaterFootprintContract {
     }
 
     #[sv::msg(exec)]
-    fn register_company(
-        &self,
-        ctx: ExecCtx,
-        name: String,
-        metadata: Value,
-    ) -> StdResult<Response> {
+    fn register_company(&self, ctx: ExecCtx, name: String, metadata: Value) -> StdResult<Response> {
         let name = name.trim().to_string();
         if name.is_empty() {
             return Err(ContractError::EmptyName.into());

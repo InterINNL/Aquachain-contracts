@@ -58,10 +58,11 @@ mod tests {
             )
             .call(&stranger);
         assert!(res.is_err(), "non-owner must not log usage");
-        assert!(res
-            .unwrap_err()
-            .to_string()
-            .contains(&ContractError::Unauthorized.to_string()));
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains(&ContractError::Unauthorized.to_string())
+        );
     }
 
     #[test]
@@ -83,10 +84,12 @@ mod tests {
             .log_usage(1, "  ".to_string(), Uint128::new(100), Uint128::new(10))
             .call(&owner);
         assert!(empty_period.is_err());
-        assert!(empty_period
-            .unwrap_err()
-            .to_string()
-            .contains(&ContractError::EmptyPeriod.to_string()));
+        assert!(
+            empty_period
+                .unwrap_err()
+                .to_string()
+                .contains(&ContractError::EmptyPeriod.to_string())
+        );
 
         let illogical = contract
             .log_usage(
@@ -97,19 +100,23 @@ mod tests {
             )
             .call(&owner);
         assert!(illogical.is_err());
-        assert!(illogical
-            .unwrap_err()
-            .to_string()
-            .contains(&ContractError::IllogicalMetrics.to_string()));
+        assert!(
+            illogical
+                .unwrap_err()
+                .to_string()
+                .contains(&ContractError::IllogicalMetrics.to_string())
+        );
 
         let zero_usage = contract
             .log_usage(1, "2026-Q1".to_string(), Uint128::zero(), Uint128::zero())
             .call(&owner);
         assert!(zero_usage.is_err());
-        assert!(zero_usage
-            .unwrap_err()
-            .to_string()
-            .contains(&ContractError::ZeroUsage.to_string()));
+        assert!(
+            zero_usage
+                .unwrap_err()
+                .to_string()
+                .contains(&ContractError::ZeroUsage.to_string())
+        );
     }
 
     #[test]
@@ -185,10 +192,11 @@ mod tests {
             .issue_certificate(1, "2026-Q1".to_string())
             .call(&admin);
         assert!(low.is_err());
-        assert!(low
-            .unwrap_err()
-            .to_string()
-            .contains(&ContractError::CriteriaNotMet.to_string()));
+        assert!(
+            low.unwrap_err()
+                .to_string()
+                .contains(&ContractError::CriteriaNotMet.to_string())
+        );
 
         // Add another validated log bringing ratio to 15%
         contract
@@ -217,10 +225,12 @@ mod tests {
             .issue_certificate(1, "2026-Q1".to_string())
             .call(&admin);
         assert!(again.is_err());
-        assert!(again
-            .unwrap_err()
-            .to_string()
-            .contains(&ContractError::AlreadyIssued.to_string()));
+        assert!(
+            again
+                .unwrap_err()
+                .to_string()
+                .contains(&ContractError::AlreadyIssued.to_string())
+        );
     }
 
     #[test]
