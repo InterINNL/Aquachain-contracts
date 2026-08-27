@@ -2,3 +2,8 @@
 **/schema/
 Cargo.lock
 .env
+*.swp
+.idea/
+code_id.txt
+contract_addr.txt
+/client/

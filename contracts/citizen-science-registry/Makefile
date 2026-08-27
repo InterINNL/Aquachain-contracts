@@ -220,7 +220,7 @@ verify-data:
 	wasmd tx wasm execute $$CONTRACT_ADDR "$$MSG" \
 		--from $(KEY_NAME) \
 		--gas auto --gas-adjustment 1.3 \
-		--chain-id testing --node http://localhost:26657 \
+		--chain-id $(CHAIN_ID) --node $(NODE) \
 		--fees 5000ustake \
 		--keyring-backend file \
 		--broadcast-mode=sync -y | tee /dev/stderr
