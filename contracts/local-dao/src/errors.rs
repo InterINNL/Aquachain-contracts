@@ -35,6 +35,24 @@ pub enum ContractError {
 
     #[error("Proposal already finalized")]
     AlreadyFinalized,
+
+    #[error("Unsupported action tag")]
+    UnsupportedAction,
+
+    #[error("Action target contract is not configured")]
+    ActionTargetNotConfigured,
+
+    #[error("Action metadata is invalid for the selected action")]
+    InvalidActionMetadata,
+
+    #[error("Attached funds are required for this action")]
+    MissingFunds,
+
+    #[error("Attached funds do not match the proposal reward amount")]
+    InvalidFundsAmount,
+
+    #[error("Unauthorized")]
+    Unauthorized,
 }
 
 impl From<ContractError> for StdError {

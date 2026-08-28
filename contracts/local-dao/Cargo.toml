@@ -25,3 +25,6 @@ cosmwasm-schema = "2.2.2"
 
 [dev-dependencies]
 sylvia = { version = "1.3.0", features = ["mt"] }
+community-bounty = { path = "../community-bounty", features = ["library"] }
+water-credit-marketplace = { path = "../water-credit-marketplace", features = ["library"] }
+citizen-science-registry = { path = "../citizen-science-registry", features = ["library"] }

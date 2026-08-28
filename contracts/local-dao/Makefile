@@ -43,7 +43,7 @@ install:
 	@echo "Instantiating contract with CODE_ID from code_id.txt..."
 	@CODE_ID=$$(cat code_id.txt); \
 	ADDR=$$(wasmd keys show $(KEY_NAME) -a --keyring-backend file); \
-	INIT_MSG='{"quorum_bps":3000,"voting_period_seconds":604800}'; \
+		INIT_MSG='{"config":{"quorum_bps":3000,"voting_period_seconds":604800,"community_bounty":"REPLACE","water_credit_marketplace":"REPLACE","citizen_science_registry":"REPLACE","default_denom":"uosmo"}}'; \
 	echo "Using CODE_ID=$$CODE_ID, ADMIN=$$ADDR, INIT_MSG=$$INIT_MSG"; \
 	TX_HASH=$$( \
 	wasmd tx wasm instantiate $$CODE_ID "$$INIT_MSG" \

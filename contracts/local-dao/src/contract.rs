@@ -1,14 +1,18 @@
+use crate::actions::{
+    action_target_configured, build_execute_message, is_allowed_action, validate_action_metadata,
+};
 use crate::constants::{
+    ADMIN, CITIZEN_SCIENCE_REGISTRY, COMMUNITY_BOUNTY, DEFAULT_DENOM, DEFAULT_DENOM_VALUE,
     DEFAULT_QUORUM_BPS, DEFAULT_VOTING_PERIOD_SECONDS, NEXT_PROPOSAL_ID, PROPOSALS, QUORUM_BPS,
-    TOTAL_VOTERS, VOTER_REGISTRY, VOTES, VOTING_PERIOD_SECONDS,
+    TOTAL_VOTERS, VOTER_REGISTRY, VOTES, VOTING_PERIOD_SECONDS, WATER_CREDIT_MARKETPLACE,
 };
 use crate::errors::ContractError;
 use cosmwasm_schema::cw_serde;
 use cw_storage_plus::Bound;
-use serde_json::{Value, to_string};
+use serde_json::{to_string, Value};
 use sylvia::contract;
 use sylvia::ctx::{ExecCtx, InstantiateCtx, QueryCtx};
-use sylvia::cw_std::{Addr, Order, Response, StdResult};
+use sylvia::cw_std::{Addr, CosmosMsg, Order, Response, StdResult};
 use sylvia::entry_points;
 
 #[cw_serde]
@@ -49,6 +53,16 @@ pub struct VoteRecord {
     pub vote: VoteOption,
 }
 
+#[cw_serde]
+pub struct InstantiateConfig {
+    pub quorum_bps: Option<u64>,
+    pub voting_period_seconds: Option<u64>,
+    pub community_bounty: Option<Addr>,
+    pub water_credit_marketplace: Option<Addr>,
+    pub citizen_science_registry: Option<Addr>,
+    pub default_denom: Option<String>,
+}
+
 pub struct LocalDaoContract;
 
 #[cfg_attr(not(feature = "library"), entry_points)]
@@ -60,24 +74,63 @@ impl LocalDaoContract {
     }
 
     #[sv::msg(instantiate)]
-    fn instantiate(
-        &self,
-        ctx: InstantiateCtx,
-        quorum_bps: Option<u64>,
-        voting_period_seconds: Option<u64>,
-    ) -> StdResult<Response> {
-        let quorum = quorum_bps.unwrap_or(DEFAULT_QUORUM_BPS);
-        let period = voting_period_seconds.unwrap_or(DEFAULT_VOTING_PERIOD_SECONDS);
+    fn instantiate(&self, ctx: InstantiateCtx, config: InstantiateConfig) -> StdResult<Response> {
+        let quorum = config.quorum_bps.unwrap_or(DEFAULT_QUORUM_BPS);
+        let period = config
+            .voting_period_seconds
+            .unwrap_or(DEFAULT_VOTING_PERIOD_SECONDS);
+        let denom = config
+            .default_denom
+            .unwrap_or_else(|| DEFAULT_DENOM_VALUE.to_string());
 
+        ADMIN.save(ctx.deps.storage, &ctx.info.sender)?;
         QUORUM_BPS.save(ctx.deps.storage, &quorum)?;
         VOTING_PERIOD_SECONDS.save(ctx.deps.storage, &period)?;
+        DEFAULT_DENOM.save(ctx.deps.storage, &denom)?;
         NEXT_PROPOSAL_ID.save(ctx.deps.storage, &1)?;
         TOTAL_VOTERS.save(ctx.deps.storage, &0)?;
+
+        if let Some(addr) = config.community_bounty {
+            COMMUNITY_BOUNTY.save(ctx.deps.storage, &addr)?;
+        }
+        if let Some(addr) = config.water_credit_marketplace {
+            WATER_CREDIT_MARKETPLACE.save(ctx.deps.storage, &addr)?;
+        }
+        if let Some(addr) = config.citizen_science_registry {
+            CITIZEN_SCIENCE_REGISTRY.save(ctx.deps.storage, &addr)?;
+        }
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
             .add_attribute("quorum_bps", quorum.to_string())
-            .add_attribute("voting_period_seconds", period.to_string()))
+            .add_attribute("voting_period_seconds", period.to_string())
+            .add_attribute("default_denom", denom))
+    }
+
+    #[sv::msg(exec)]
+    fn update_action_targets(
+        &self,
+        ctx: ExecCtx,
+        community_bounty: Option<Addr>,
+        water_credit_marketplace: Option<Addr>,
+        citizen_science_registry: Option<Addr>,
+    ) -> StdResult<Response> {
+        let admin = ADMIN.load(ctx.deps.storage)?;
+        if ctx.info.sender != admin {
+            return Err(ContractError::Unauthorized.into());
+        }
+
+        if let Some(addr) = community_bounty {
+            COMMUNITY_BOUNTY.save(ctx.deps.storage, &addr)?;
+        }
+        if let Some(addr) = water_credit_marketplace {
+            WATER_CREDIT_MARKETPLACE.save(ctx.deps.storage, &addr)?;
+        }
+        if let Some(addr) = citizen_science_registry {
+            CITIZEN_SCIENCE_REGISTRY.save(ctx.deps.storage, &addr)?;
+        }
+
+        Ok(Response::new().add_attribute("action", "update_action_targets"))
     }
 
     #[sv::msg(exec)]
@@ -95,6 +148,12 @@ impl LocalDaoContract {
         if action_tag.trim().is_empty() {
             return Err(ContractError::MissingActionTag.into());
         }
+        let action_tag = action_tag.trim().to_string();
+        if !is_allowed_action(&action_tag) {
+            return Err(ContractError::UnsupportedAction.into());
+        }
+        action_target_configured(ctx.deps.storage, &action_tag)?;
+        validate_action_metadata(&action_tag, &metadata)?;
 
         let metadata_str = parse_metadata(&metadata)?;
         let now = ctx.env.block.time.seconds();
@@ -106,7 +165,7 @@ impl LocalDaoContract {
             proposer: ctx.info.sender.clone(),
             title: title.trim().to_string(),
             description: description.trim().to_string(),
-            action_tag: action_tag.trim().to_string(),
+            action_tag: action_tag.clone(),
             metadata_str,
             status: ProposalStatus::Open,
             yes_votes: 0,
@@ -210,10 +269,12 @@ impl LocalDaoContract {
                 .add_attribute("reason", "not_passed"));
         }
 
+        let wasm_msg = build_execute_message(ctx.deps.storage, &proposal, &ctx.info.funds)?;
         proposal.status = ProposalStatus::Executed;
         PROPOSALS.save(ctx.deps.storage, proposal_id, &proposal)?;
 
         Ok(Response::new()
+            .add_message(CosmosMsg::Wasm(wasm_msg))
             .add_attribute("action", "execute_proposal")
             .add_attribute("proposal_id", proposal_id.to_string())
             .add_attribute("action_tag", proposal.action_tag.clone())
