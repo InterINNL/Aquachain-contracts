@@ -1,23 +1,23 @@
 #[cfg(test)]
 mod tests {
     use crate::actions::{ACTION_MINT_CREDITS, ACTION_POST_BOUNTY};
+    use crate::contract::LocalDaoContract;
     use crate::contract::sv::mt::CodeId;
     use crate::contract::sv::mt::LocalDaoContractProxy;
-    use crate::contract::LocalDaoContract;
     use crate::contract::{InstantiateConfig, ProposalStatus, VoteOption};
     use crate::errors::ContractError;
-    use community_bounty::contract::sv::mt::CodeId as BountyCodeId;
-    use community_bounty::contract::sv::mt::CommunityBountyContractProxy;
     use community_bounty::contract::BountyStatus;
     use community_bounty::contract::CommunityBountyContract;
+    use community_bounty::contract::sv::mt::CodeId as BountyCodeId;
+    use community_bounty::contract::sv::mt::CommunityBountyContractProxy;
     use serde_json::json;
     use sylvia::cw_multi_test::{App as MtApp, BankSudo, IntoAddr, SudoMsg};
-    use sylvia::cw_std::{coin, Timestamp, Uint128};
+    use sylvia::cw_std::{Timestamp, Uint128, coin};
     use sylvia::multitest::App;
     use sylvia::multitest::Proxy;
+    use water_credit_marketplace::contract::WaterCreditMarketplaceContract;
     use water_credit_marketplace::contract::sv::mt::CodeId as WcmCodeId;
     use water_credit_marketplace::contract::sv::mt::WaterCreditMarketplaceContractProxy;
-    use water_credit_marketplace::contract::WaterCreditMarketplaceContract;
 
     const TEST_DENOM: &str = "ustake";
 
@@ -151,10 +151,11 @@ mod tests {
 
         let dup = contract.vote(1, VoteOption::No).call(&voter);
         assert!(dup.is_err());
-        assert!(dup
-            .unwrap_err()
-            .to_string()
-            .contains(&ContractError::AlreadyVoted.to_string()));
+        assert!(
+            dup.unwrap_err()
+                .to_string()
+                .contains(&ContractError::AlreadyVoted.to_string())
+        );
     }
 
     #[test]
@@ -173,10 +174,11 @@ mod tests {
             )
             .call(&proposer);
         assert!(err.is_err());
-        assert!(err
-            .unwrap_err()
-            .to_string()
-            .contains(&ContractError::UnsupportedAction.to_string()));
+        assert!(
+            err.unwrap_err()
+                .to_string()
+                .contains(&ContractError::UnsupportedAction.to_string())
+        );
     }
 
     #[test]
@@ -198,10 +200,11 @@ mod tests {
 
         let err = contract.execute_proposal(1).call(&proposer);
         assert!(err.is_err());
-        assert!(err
-            .unwrap_err()
-            .to_string()
-            .contains(&ContractError::VotingNotEnded.to_string()));
+        assert!(
+            err.unwrap_err()
+                .to_string()
+                .contains(&ContractError::VotingNotEnded.to_string())
+        );
     }
 
     #[test]
@@ -299,7 +302,7 @@ mod tests {
                 "Mint cleanup credits".to_string(),
                 "Reward verified river stewards with tradable credits.".to_string(),
                 ACTION_MINT_CREDITS.to_string(),
-                mint_metadata(&beneficiary.to_string(), "75"),
+                mint_metadata(beneficiary.as_ref(), "75"),
             )
             .call(&proposer)
             .unwrap();
@@ -346,10 +349,11 @@ mod tests {
             .with_funds(&[coin(400, TEST_DENOM)])
             .call(&proposer);
         assert!(err.is_err());
-        assert!(err
-            .unwrap_err()
-            .to_string()
-            .contains(&ContractError::InvalidFundsAmount.to_string()));
+        assert!(
+            err.unwrap_err()
+                .to_string()
+                .contains(&ContractError::InvalidFundsAmount.to_string())
+        );
     }
 
     #[test]

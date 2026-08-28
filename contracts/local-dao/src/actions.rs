@@ -13,8 +13,11 @@ pub const ACTION_POST_BOUNTY: &str = "post_bounty";
 pub const ACTION_MINT_CREDITS: &str = "mint_credits";
 pub const ACTION_REWARD_SENSOR: &str = "reward_sensor";
 
-pub const ALLOWED_ACTIONS: [&str; 3] =
-    [ACTION_POST_BOUNTY, ACTION_MINT_CREDITS, ACTION_REWARD_SENSOR];
+pub const ALLOWED_ACTIONS: [&str; 3] = [
+    ACTION_POST_BOUNTY,
+    ACTION_MINT_CREDITS,
+    ACTION_REWARD_SENSOR,
+];
 
 #[cw_serde]
 struct PostBountyMetadata {
@@ -41,7 +44,10 @@ pub fn is_allowed_action(action_tag: &str) -> bool {
     ALLOWED_ACTIONS.contains(&action_tag)
 }
 
-pub fn action_target_configured(storage: &dyn Storage, action_tag: &str) -> Result<(), ContractError> {
+pub fn action_target_configured(
+    storage: &dyn Storage,
+    action_tag: &str,
+) -> Result<(), ContractError> {
     let configured = match action_tag {
         ACTION_POST_BOUNTY => COMMUNITY_BOUNTY.may_load(storage)?.is_some(),
         ACTION_MINT_CREDITS => WATER_CREDIT_MARKETPLACE.may_load(storage)?.is_some(),
@@ -99,11 +105,11 @@ pub fn build_execute_message(
     let denom = DEFAULT_DENOM.load(storage)?;
 
     match proposal.action_tag.as_str() {
-        ACTION_POST_BOUNTY => build_post_bounty(storage, proposal, &metadata, attached_funds, &denom),
-        ACTION_MINT_CREDITS => build_mint_credits(storage, &metadata),
-        ACTION_REWARD_SENSOR => {
-            build_reward_sensor(storage, &metadata, attached_funds, &denom)
+        ACTION_POST_BOUNTY => {
+            build_post_bounty(storage, proposal, &metadata, attached_funds, &denom)
         }
+        ACTION_MINT_CREDITS => build_mint_credits(storage, &metadata),
+        ACTION_REWARD_SENSOR => build_reward_sensor(storage, &metadata, attached_funds, &denom),
         _ => Err(ContractError::UnsupportedAction),
     }
 }
