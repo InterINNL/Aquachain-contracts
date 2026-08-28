@@ -8,6 +8,7 @@ CosmWasm (Sylvia) smart contracts for AquaChain water-management demos.
 | **water-well-initiative**    | `water_well_initiative`    | Funded water projects, donations, disbursement |
 | **utility-water-footprint**  | `utility_water_footprint`  | Utility companies, usage logs, certificates    |
 | **sustainable-action-rewards** | `sustainable_action_rewards` | Community eco actions, verify, reward impact |
+| **community-bounty** | `community_bounty` | Escrowed sustainability tasks, submissions, payout |
 
 Frontend: [InterINNL/Aquachain-frontend](https://github.com/InterINNL/Aquachain-frontend)
 
@@ -84,10 +85,11 @@ Build each crate first (`make build`), then from the contracts repo root:
 | 2     | `LABEL=water-well-initiative`    | `…/water_well_initiative.wasm`                                        | `WaterWellContractAddress`             |
 | 3     | `LABEL=utility-water-footprint`  | `…/utility_water_footprint.wasm`                                      | `UtilityWaterFootprintContractAddress` |
 | 4     | `LABEL=sustainable-action-rewards` | `…/sustainable_action_rewards.wasm`                                 | `SustainableActionRewardsContractAddress` |
+| 5     | `LABEL=community-bounty` | `…/community_bounty.wasm` | `CommunityBountyContractAddress` |
 
 ```sh
-LABEL=sustainable-action-rewards node scripts/deploy-osmosis.mjs \
-  target/wasm32-unknown-unknown/release/sustainable_action_rewards.wasm
+LABEL=community-bounty node scripts/deploy-osmosis.mjs \
+  target/wasm32-unknown-unknown/release/community_bounty.wasm
 ```
 
 Paste each printed `contract` address into frontend `environment.prod.ts` (live) or `environment.ts` (local).
@@ -100,17 +102,19 @@ Optional demo seeds (same auth env vars; optional `CONTRACT=osmo1…`):
 | `scripts/seed-water-well-osmosis.mjs` | Water Well      |
 | `scripts/seed-footprint-osmosis.mjs`  | Water Utilities |
 | `scripts/seed-sustainable-actions-osmosis.mjs` | Sustainable Actions |
+| `scripts/seed-community-bounty-osmosis.mjs` | Community Bounty |
 
-## Demo checklist (four modules)
+## Demo checklist (five modules)
 
-1. Deploy all four contracts (local wasmd **or** Osmosis as above).
-2. Set the four env keys in the frontend build that reviewers will open.
+1. Deploy all five contracts (local wasmd **or** Osmosis as above).
+2. Set the five env keys in the frontend build that reviewers will open.
 3. Connect Keplr to the matching chain; fund the account.
 4. Smoke each path:
    - **Citizen Science:** register sensor → activate → submit data → verify → reward
    - **Water Well:** create → validate → donate → unlock → disburse
    - **Water Utilities:** register company → log usage/savings → validate → issue certificate (≥10% validated savings ratio)
    - **Sustainable Actions:** submit action → verify → reward with funds
+   - **Community Bounty:** post bounty with escrow → submit work → approve winner (payout)
 
 Demo geography: use **Indian cities and regions** in seed scripts and UI examples (Delhi, Bengaluru, Udaipur, Mumbai, Gujarat, etc.).
 

@@ -4,6 +4,7 @@ members = [
   "contracts/citizen-science-registry",
   "contracts/utility-water-footprint",
   "contracts/sustainable-action-rewards",
+  "contracts/community-bounty",
 ]
 resolver = "3"
 
