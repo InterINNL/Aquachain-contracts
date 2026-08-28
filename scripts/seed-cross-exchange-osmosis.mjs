@@ -2,8 +2,10 @@
 /**
  * Seed demo Cross Platform Exchange partners on Osmosis testnet.
  *
- *   PRIVATE_KEY='…' CONTRACT=osmo1… node seed-cross-exchange-osmosis.mjs
+ *   set -a && . ../.env && set +a
+ *   CONTRACT=osmo1… node seed-cross-exchange-osmosis.mjs
  */
+import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -23,12 +25,72 @@ const DENOM = process.env.DENOM ?? "uosmo";
 const CONTRACT = process.env.CONTRACT ?? "";
 
 const fee = {
-  amount: [{ denom: DENOM, amount: "50000" }],
-  gas: "500000",
+  amount: [{ denom: DENOM, amount: "500000" }],
+  gas: "1500000",
 };
 
+const partners = [
+  {
+    denom: "gujarat-water-unit",
+    label: "Gujarat regional water ledger",
+    region: "Ahmedabad, Gujarat, India",
+    base_amount: "1000000",
+    partner_amount: "100",
+    rateLabel: "Gujarat rate (1 OSMO = 100 units)",
+  },
+  {
+    denom: "yamuna-credit",
+    label: "Yamuna basin conservation credits",
+    region: "Delhi NCR, India",
+    base_amount: "500000",
+    partner_amount: "25",
+    rateLabel: "Yamuna rate",
+  },
+  {
+    denom: "bengaluru-aqua-point",
+    label: "Bengaluru municipal aqua points",
+    region: "Bengaluru, Karnataka, India",
+    base_amount: "2000000",
+    partner_amount: "50",
+    rateLabel: "Bengaluru rate",
+  },
+  {
+    denom: "udaipur-lake-point",
+    label: "Udaipur lake stewardship points",
+    region: "Udaipur, Rajasthan, India",
+    base_amount: "1000000",
+    partner_amount: "40",
+    rateLabel: "Udaipur rate",
+  },
+];
+
+function loadMnemonicFromEnvFile() {
+  const envPath = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../.env",
+  );
+  try {
+    const line = readFileSync(envPath, "utf8")
+      .split(/\r?\n/)
+      .find((row) => row.startsWith("MNEMONIC="));
+    if (!line) {
+      return "";
+    }
+    const raw = line.slice("MNEMONIC=".length).trim();
+    if (
+      (raw.startsWith("'") && raw.endsWith("'")) ||
+      (raw.startsWith('"') && raw.endsWith('"'))
+    ) {
+      return raw.slice(1, -1).trim();
+    }
+    return raw;
+  } catch {
+    return "";
+  }
+}
+
 async function loadWallet() {
-  const mnemonic = process.env.MNEMONIC?.trim();
+  const mnemonic = process.env.MNEMONIC?.trim() || loadMnemonicFromEnvFile();
   if (mnemonic) {
     return DirectSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "osmo" });
   }
@@ -39,7 +101,7 @@ async function loadWallet() {
       "osmo",
     );
   }
-  console.error("Set MNEMONIC or PRIVATE_KEY");
+  console.error("Set MNEMONIC in contracts/.env or MNEMONIC / PRIVATE_KEY env");
   process.exit(1);
 }
 
@@ -64,101 +126,63 @@ async function query(msg) {
   return client.queryContractSmart(CONTRACT, msg);
 }
 
+async function partnerExists(denom) {
+  try {
+    await query({ get_partner: { partner_denom: denom } });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function rateExists(denom) {
+  try {
+    await query({ get_rate: { partner_denom: denom } });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 console.log("Signer  ", me);
 console.log("Contract", CONTRACT);
 
-await exec(
-  {
-    register_partner: {
-      denom: "gujarat-water-unit",
-      label: "Gujarat regional water ledger",
-      region: "Ahmedabad, Gujarat, India",
-    },
-  },
-  "Gujarat partner",
-);
+for (const partner of partners) {
+  if (!(await partnerExists(partner.denom))) {
+    await exec(
+      {
+        register_partner: {
+          denom: partner.denom,
+          label: partner.label,
+          region: partner.region,
+        },
+      },
+      `${partner.denom} partner`,
+    );
+  } else {
+    console.log("skip register", partner.denom, "(already exists)");
+  }
 
-await exec(
-  {
-    set_rate: {
-      partner_denom: "gujarat-water-unit",
-      base_amount: "1000000",
-      partner_amount: "100",
-    },
-  },
-  "Gujarat rate (1 OSMO = 100 units)",
-);
+  if (!(await rateExists(partner.denom))) {
+    await exec(
+      {
+        set_rate: {
+          partner_denom: partner.denom,
+          base_amount: partner.base_amount,
+          partner_amount: partner.partner_amount,
+        },
+      },
+      partner.rateLabel,
+    );
+  } else {
+    console.log("skip rate", partner.denom, "(already set)");
+  }
+}
 
-await exec(
-  {
-    register_partner: {
-      denom: "yamuna-credit",
-      label: "Yamuna basin conservation credits",
-      region: "Delhi NCR, India",
-    },
-  },
-  "Yamuna partner",
-);
-
-await exec(
-  {
-    set_rate: {
-      partner_denom: "yamuna-credit",
-      base_amount: "500000",
-      partner_amount: "25",
-    },
-  },
-  "Yamuna rate",
-);
-
-await exec(
-  {
-    register_partner: {
-      denom: "bengaluru-aqua-point",
-      label: "Bengaluru municipal aqua points",
-      region: "Bengaluru, Karnataka, India",
-    },
-  },
-  "Bengaluru partner",
-);
-
-await exec(
-  {
-    set_rate: {
-      partner_denom: "bengaluru-aqua-point",
-      base_amount: "2000000",
-      partner_amount: "50",
-    },
-  },
-  "Bengaluru rate",
-);
-
-await exec(
-  {
-    register_partner: {
-      denom: "udaipur-lake-point",
-      label: "Udaipur lake stewardship points",
-      region: "Udaipur, Rajasthan, India",
-    },
-  },
-  "Udaipur partner",
-);
-
-await exec(
-  {
-    set_rate: {
-      partner_denom: "udaipur-lake-point",
-      base_amount: "1000000",
-      partner_amount: "40",
-    },
-  },
-  "Udaipur rate",
-);
-
-const partners = await query({ list_partners: { limit: 10 } });
+const listed = await query({ list_partners: { limit: 10 } });
 console.log(
   "Partners",
-  partners.map((p) => ({
+  listed.map((p) => ({
     denom: p.denom,
     label: p.label,
     region: p.region,
