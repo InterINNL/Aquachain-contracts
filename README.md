@@ -2,18 +2,19 @@
 
 CosmWasm (Sylvia) smart contracts for AquaChain water-management demos.
 
-| Contract                     | Crate                      | Role                                           |
-| ---------------------------- | -------------------------- | ---------------------------------------------- |
-| **citizen-science-registry** | `citizen_science_registry` | Sensors, data submissions, verifiers, rewards  |
-| **water-well-initiative**    | `water_well_initiative`    | Funded water projects, donations, disbursement |
-| **utility-water-footprint**  | `utility_water_footprint`  | Utility companies, usage logs, certificates    |
-| **sustainable-action-rewards** | `sustainable_action_rewards` | Community eco actions, verify, reward impact |
-| **community-bounty** | `community_bounty` | Escrowed sustainability tasks, submissions, payout |
-| **water-credit-marketplace** | `water_credit_marketplace` | Internal conservation credit ledger and marketplace |
-| **local-dao** | `local_dao` | Community proposals, voting, and on-chain finalization |
-| **cross-platform-exchange** | `cross_platform_exchange` | Fixed-rate swaps between base denom and partner ledgers |
+| Contract                       | Crate                        | Role                                                    |
+| ------------------------------ | ---------------------------- | ------------------------------------------------------- |
+| **citizen-science-registry**   | `citizen_science_registry`   | Sensors, data submissions, verifiers, rewards           |
+| **water-well-initiative**      | `water_well_initiative`      | Funded water projects, donations, disbursement          |
+| **utility-water-footprint**    | `utility_water_footprint`    | Utility companies, usage logs, certificates             |
+| **sustainable-action-rewards** | `sustainable_action_rewards` | Community eco actions, verify, reward impact            |
+| **community-bounty**           | `community_bounty`           | Escrowed sustainability tasks, submissions, payout      |
+| **water-credit-marketplace**   | `water_credit_marketplace`   | Internal conservation credit ledger and marketplace     |
+| **local-dao**                  | `local_dao`                  | Community proposals, voting, and on-chain finalization  |
+| **cross-platform-exchange**    | `cross_platform_exchange`    | Fixed-rate swaps between base denom and partner ledgers |
+| **agent-gateway** (Phase G)    | `aquachain-agent-gateway`    | x402 USDC HTTP API, drone measurements, Osmosis relay   |
 
-Frontend: [InterINNL/Aquachain-frontend](https://github.com/InterINNL/Aquachain-frontend)
+Frontend: [InterINNL/frontend](https://github.com/InterINNL/frontend)
 
 ## Requirements
 
@@ -82,16 +83,16 @@ Requires sibling frontend `node_modules` (`@cosmjs/*`). Auth: set `MNEMONIC` or 
 
 Build each crate first (`make build`), then from the contracts repo root:
 
-| Order | Label env                        | WASM artifact                                                         | Frontend env key                       |
-| ----- | -------------------------------- | --------------------------------------------------------------------- | -------------------------------------- |
-| 1     | `LABEL=citizen-science-registry` | `target/wasm32-unknown-unknown/release/citizen_science_registry.wasm` | `CitizenScienceContractAddress`        |
-| 2     | `LABEL=water-well-initiative`    | `…/water_well_initiative.wasm`                                        | `WaterWellContractAddress`             |
-| 3     | `LABEL=utility-water-footprint`  | `…/utility_water_footprint.wasm`                                      | `UtilityWaterFootprintContractAddress` |
-| 4     | `LABEL=sustainable-action-rewards` | `…/sustainable_action_rewards.wasm`                                 | `SustainableActionRewardsContractAddress` |
-| 5     | `LABEL=community-bounty` | `…/community_bounty.wasm` | `CommunityBountyContractAddress` |
-| 6     | `LABEL=water-credit-marketplace` | `…/water_credit_marketplace.wasm` | `WaterCreditMarketplaceContractAddress` |
-| 7     | `LABEL=local-dao` | `…/local_dao.wasm` | `LocalDaoContractAddress` |
-| 8     | `LABEL=cross-platform-exchange` | `…/cross_platform_exchange.wasm` | `CrossPlatformExchangeContractAddress` |
+| Order | Label env                          | WASM artifact                                                         | Frontend env key                          |
+| ----- | ---------------------------------- | --------------------------------------------------------------------- | ----------------------------------------- |
+| 1     | `LABEL=citizen-science-registry`   | `target/wasm32-unknown-unknown/release/citizen_science_registry.wasm` | `CitizenScienceContractAddress`           |
+| 2     | `LABEL=water-well-initiative`      | `…/water_well_initiative.wasm`                                        | `WaterWellContractAddress`                |
+| 3     | `LABEL=utility-water-footprint`    | `…/utility_water_footprint.wasm`                                      | `UtilityWaterFootprintContractAddress`    |
+| 4     | `LABEL=sustainable-action-rewards` | `…/sustainable_action_rewards.wasm`                                   | `SustainableActionRewardsContractAddress` |
+| 5     | `LABEL=community-bounty`           | `…/community_bounty.wasm`                                             | `CommunityBountyContractAddress`          |
+| 6     | `LABEL=water-credit-marketplace`   | `…/water_credit_marketplace.wasm`                                     | `WaterCreditMarketplaceContractAddress`   |
+| 7     | `LABEL=local-dao`                  | `…/local_dao.wasm`                                                    | `LocalDaoContractAddress`                 |
+| 8     | `LABEL=cross-platform-exchange`    | `…/cross_platform_exchange.wasm`                                      | `CrossPlatformExchangeContractAddress`    |
 
 ```sh
 LABEL=cross-platform-exchange node scripts/deploy-osmosis.mjs \
@@ -102,16 +103,16 @@ Paste each printed `contract` address into frontend `environment.prod.ts` (live)
 
 Optional demo seeds (same auth env vars; optional `CONTRACT=osmo1…`):
 
-| Script                                | Module          |
-| ------------------------------------- | --------------- |
-| `scripts/seed-osmosis.mjs`            | Citizen Science |
-| `scripts/seed-water-well-osmosis.mjs` | Water Well      |
-| `scripts/seed-footprint-osmosis.mjs`  | Water Utilities |
+| Script                                         | Module              |
+| ---------------------------------------------- | ------------------- |
+| `scripts/seed-osmosis.mjs`                     | Citizen Science     |
+| `scripts/seed-water-well-osmosis.mjs`          | Water Well          |
+| `scripts/seed-footprint-osmosis.mjs`           | Water Utilities     |
 | `scripts/seed-sustainable-actions-osmosis.mjs` | Sustainable Actions |
-| `scripts/seed-community-bounty-osmosis.mjs` | Community Bounty |
-| `scripts/seed-water-credits-osmosis.mjs` | Water Credits |
-| `scripts/seed-local-dao-osmosis.mjs` | Local DAO |
-| `scripts/seed-cross-exchange-osmosis.mjs` | Cross Exchange |
+| `scripts/seed-community-bounty-osmosis.mjs`    | Community Bounty    |
+| `scripts/seed-water-credits-osmosis.mjs`       | Water Credits       |
+| `scripts/seed-local-dao-osmosis.mjs`           | Local DAO           |
+| `scripts/seed-cross-exchange-osmosis.mjs`      | Cross Exchange      |
 
 ## Demo checklist (eight modules)
 
