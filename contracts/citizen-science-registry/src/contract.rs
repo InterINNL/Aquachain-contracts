@@ -15,7 +15,6 @@ use sha2::{Digest, Sha256};
 use sylvia::contract;
 use sylvia::ctx::{ExecCtx, InstantiateCtx, QueryCtx};
 use sylvia::cw_std::{Addr, BankMsg, Coin, Order, Response, StdResult};
-use sylvia::entry_points;
 
 #[cw_serde]
 pub struct Sensor {

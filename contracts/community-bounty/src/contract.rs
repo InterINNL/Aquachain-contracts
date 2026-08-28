@@ -8,7 +8,6 @@ use serde_json::{Value, to_string};
 use sylvia::contract;
 use sylvia::ctx::{ExecCtx, InstantiateCtx, QueryCtx};
 use sylvia::cw_std::{Addr, BankMsg, Coin, Order, Response, StdResult, Uint128};
-use sylvia::entry_points;
 
 #[cw_serde]
 pub enum BountyStatus {

@@ -302,7 +302,7 @@ mod tests {
                 "Mint cleanup credits".to_string(),
                 "Reward verified river stewards with tradable credits.".to_string(),
                 ACTION_MINT_CREDITS.to_string(),
-                mint_metadata(&beneficiary.to_string(), "75"),
+                mint_metadata(beneficiary.as_ref(), "75"),
             )
             .call(&proposer)
             .unwrap();
