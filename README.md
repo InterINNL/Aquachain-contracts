@@ -79,7 +79,7 @@ make deploy CHAIN_ID=… NODE=… DENOM=… KEY_NAME=…
 
 ## Osmosis testnet deploy (`osmo-test-5`)
 
-Requires sibling frontend `node_modules` (`@cosmjs/*`). Auth: set `MNEMONIC` or `PRIVATE_KEY` (32-byte hex) for an `osmo1…` account with testnet OSMO.
+Requires sibling frontend `node_modules` (`@cosmjs/*`). Auth: deploy mnemonic in `../../.secrets/osmosis-deploy.env` (or `MNEMONIC` / `PRIVATE_KEY` env) for an `osmo1…` account with testnet OSMO.
 
 Build each crate first (`make build`), then from the contracts repo root:
 

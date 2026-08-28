@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { loadMnemonic } from "./load-mnemonic.mjs";
 
 const require = createRequire(
   resolve(dirname(fileURLToPath(import.meta.url)), "../../../www/package.json"),
@@ -47,10 +48,6 @@ const defaultWasm = resolve(
 const wasmPath = resolve(process.argv[2] ?? defaultWasm);
 
 async function loadWallet() {
-  const mnemonic = process.env.MNEMONIC?.trim();
-  if (mnemonic) {
-    return DirectSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "osmo" });
-  }
   const privateKey = process.env.PRIVATE_KEY?.trim().replace(/^0x/i, "");
   if (privateKey && /^[0-9a-fA-F]{64}$/.test(privateKey)) {
     return DirectSecp256k1Wallet.fromKey(
@@ -58,10 +55,14 @@ async function loadWallet() {
       "osmo",
     );
   }
-  console.error(
-    "Set MNEMONIC or PRIVATE_KEY (32-byte hex) for an osmo1… account.",
-  );
-  process.exit(1);
+  try {
+    return DirectSecp256k1HdWallet.fromMnemonic(loadMnemonic(), { prefix: "osmo" });
+  } catch {
+    console.error(
+      "Set MNEMONIC in .secrets/osmosis-deploy.env or PRIVATE_KEY (32-byte hex) for an osmo1 account.",
+    );
+    process.exit(1);
+  }
 }
 
 const wasm = readFileSync(wasmPath);

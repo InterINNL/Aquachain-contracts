@@ -7,6 +7,7 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { loadWallet } from "./load-wallet.mjs";
 
 const require = createRequire(
   resolve(dirname(fileURLToPath(import.meta.url)), "../../../www/package.json"),
@@ -18,31 +19,16 @@ const {
   DirectSecp256k1Wallet,
 } = require("@cosmjs/proto-signing");
 
-const RPC = process.env.RPC ?? "https://rpc.testnet.osmosis.zone";
+const RPC = process.env.RPC ?? "https://rpc.osmotest5.osmosis.zone";
 const CONTRACT =
   process.env.CONTRACT ??
   "osmo1j92tmc5d2vvrrar8krmr44v9zk2jw7fw8em0fekeqqd8la44quls3zmz5z";
 
 const fee = {
-  amount: [{ denom: "uosmo", amount: "500000" }],
+  amount: [{ denom: "uosmo", amount: process.env.FEE_AMOUNT ?? "80000" }],
   gas: "1500000",
 };
 
-async function loadWallet() {
-  const mnemonic = process.env.MNEMONIC?.trim();
-  if (mnemonic) {
-    return DirectSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "osmo" });
-  }
-  const privateKey = process.env.PRIVATE_KEY?.trim().replace(/^0x/i, "");
-  if (privateKey && /^[0-9a-fA-F]{64}$/.test(privateKey)) {
-    return DirectSecp256k1Wallet.fromKey(
-      Uint8Array.from(Buffer.from(privateKey, "hex")),
-      "osmo",
-    );
-  }
-  console.error("Set MNEMONIC or PRIVATE_KEY");
-  process.exit(1);
-}
 
 const wallet = await loadWallet();
 const [account] = await wallet.getAccounts();
@@ -79,13 +65,12 @@ const companies = [
     name: "Delhi Jal Board",
     metadata: {
       sector: "municipal utility",
-      region: "Delhi, India",
-      notes: "Demo utility for AquaChain footprint module",
+      region: "Delhi NCR, India",
+      notes: "Yamuna basin supply and treatment footprint",
     },
     logs: [
       { period: "2026-Q1", usage: "1000000", savings: "150000" },
-      { period: "2026-Q1", usage: "200000", savings: "40000" },
-      { period: "2026-Q2", usage: "900000", savings: "50000" },
+      { period: "2026-Q2", usage: "900000", savings: "120000" },
     ],
     certify: "2026-Q1",
   },
@@ -94,10 +79,33 @@ const companies = [
     metadata: {
       sector: "municipal utility",
       region: "Karnataka, India",
-      notes: "Pending validation demo",
+      notes: "Cauvery stage-4 distribution savings program",
     },
     logs: [{ period: "2026-H1", usage: "500000", savings: "80000" }],
     certify: null,
+  },
+  {
+    name: "Chennai Metro Water",
+    metadata: {
+      sector: "municipal utility",
+      region: "Chennai, Tamil Nadu, India",
+      notes: "Desalination and STP reuse credits",
+    },
+    logs: [
+      { period: "2026-Q1", usage: "880000", savings: "110000" },
+      { period: "2026-Q2", usage: "820000", savings: "95000" },
+    ],
+    certify: "2026-Q1",
+  },
+  {
+    name: "Surat Municipal Corporation",
+    metadata: {
+      sector: "municipal utility",
+      region: "Surat, Gujarat, India",
+      notes: "Tapi river intake efficiency upgrades",
+    },
+    logs: [{ period: "2026-H1", usage: "640000", savings: "88000" }],
+    certify: "2026-H1",
   },
 ];
 

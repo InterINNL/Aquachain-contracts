@@ -8,6 +8,8 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { loadWallet } from "./load-wallet.mjs";
+import { loadMnemonic } from "./load-mnemonic.mjs";
 
 const require = createRequire(
   resolve(dirname(fileURLToPath(import.meta.url)), "../../../www/package.json"),
@@ -29,22 +31,6 @@ const fee = {
   gas: "1500000",
 };
 
-async function loadWallet() {
-  const mnemonic = process.env.MNEMONIC?.trim();
-  if (mnemonic) {
-    return DirectSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "osmo" });
-  }
-  const privateKey = process.env.PRIVATE_KEY?.trim().replace(/^0x/i, "");
-  if (privateKey && /^[0-9a-fA-F]{64}$/.test(privateKey)) {
-    return DirectSecp256k1Wallet.fromKey(
-      Uint8Array.from(Buffer.from(privateKey, "hex")),
-      "osmo",
-    );
-  }
-  console.error("Set MNEMONIC or PRIVATE_KEY");
-  process.exit(1);
-}
-
 if (!CONTRACT) {
   console.error("Set CONTRACT=osmo1…");
   process.exit(1);
@@ -55,16 +41,14 @@ const [account] = await wallet.getAccounts();
 const client = await SigningCosmWasmClient.connectWithSigner(RPC, wallet);
 const me = account.address;
 
-const mnemonic = process.env.MNEMONIC?.trim();
+const mnemonic = loadMnemonic();
 let verifierOperator = me;
-if (mnemonic) {
-  const verifierWallet = await DirectSecp256k1HdWallet.fromMnemonic(mnemonic, {
-    prefix: "osmo",
-    hdPaths: [stringToPath("m/44'/118'/1'/0/0")],
-  });
-  const [verifierAccount] = await verifierWallet.getAccounts();
-  verifierOperator = verifierAccount.address;
-}
+const verifierWallet = await DirectSecp256k1HdWallet.fromMnemonic(mnemonic, {
+  prefix: "osmo",
+  hdPaths: [stringToPath("m/44'/118'/1'/0/0")],
+});
+const [verifierAccount] = await verifierWallet.getAccounts();
+verifierOperator = verifierAccount.address;
 
 async function exec(msg, funds = [], label = "") {
   console.log("→", label || JSON.stringify(msg).slice(0, 100));

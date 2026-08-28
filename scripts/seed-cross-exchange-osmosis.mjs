@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { loadWallet } from "./load-wallet.mjs";
 
 const require = createRequire(
   resolve(dirname(fileURLToPath(import.meta.url)), "../../../www/package.json"),
@@ -21,87 +22,53 @@ const {
 } = require("@cosmjs/proto-signing");
 const { coin } = require("@cosmjs/amino");
 
-const RPC = process.env.RPC ?? "https://rpc.testnet.osmosis.zone";
+const RPC = process.env.RPC ?? "https://rpc.osmotest5.osmosis.zone";
 const DENOM = process.env.DENOM ?? "uosmo";
 const CONTRACT = process.env.CONTRACT ?? "";
 const ONE_OSMO = "1000000";
 
 const fee = {
-  amount: [{ denom: DENOM, amount: "500000" }],
+  amount: [{ denom: DENOM, amount: process.env.FEE_AMOUNT ?? "80000" }],
   gas: "1500000",
 };
 
 const partners = [
   {
-    denom: "gujarat-water-unit",
-    label: "Gujarat regional water ledger",
+    denom: "ibc/gujarat-water-unit",
+    label: "Gujarat regional water ledger (IBC demo)",
     region: "Ahmedabad, Gujarat, India",
     partner_amount: "100",
     rateLabel: "Gujarat: 1 OSMO = 100 ledger units",
   },
   {
-    denom: "yamuna-credit",
-    label: "Yamuna basin conservation credits",
+    denom: "ibc/yamuna-credit",
+    label: "Yamuna basin conservation credits (IBC demo)",
     region: "Delhi NCR, India",
     partner_amount: "50",
     rateLabel: "Yamuna: 1 OSMO = 50 ledger units",
   },
   {
-    denom: "bengaluru-aqua-point",
-    label: "Bengaluru municipal aqua points",
+    denom: "ibc/bengaluru-aqua-point",
+    label: "Bengaluru municipal aqua points (IBC demo)",
     region: "Bengaluru, Karnataka, India",
     partner_amount: "75",
     rateLabel: "Bengaluru: 1 OSMO = 75 ledger units",
   },
   {
-    denom: "udaipur-lake-point",
-    label: "Udaipur lake stewardship points",
+    denom: "ibc/udaipur-lake-point",
+    label: "Udaipur lake stewardship points (IBC demo)",
     region: "Udaipur, Rajasthan, India",
     partner_amount: "40",
     rateLabel: "Udaipur: 1 OSMO = 40 ledger units",
   },
+  {
+    denom: "ibc/kerala-backwater-credit",
+    label: "Kerala backwater stewardship credits (IBC demo)",
+    region: "Kochi, Kerala, India",
+    partner_amount: "60",
+    rateLabel: "Kerala: 1 OSMO = 60 ledger units",
+  },
 ];
-
-function loadMnemonicFromEnvFile() {
-  const envPath = resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    "../.env",
-  );
-  try {
-    const line = readFileSync(envPath, "utf8")
-      .split(/\r?\n/)
-      .find((row) => row.startsWith("MNEMONIC="));
-    if (!line) {
-      return "";
-    }
-    const raw = line.slice("MNEMONIC=".length).trim();
-    if (
-      (raw.startsWith("'") && raw.endsWith("'")) ||
-      (raw.startsWith('"') && raw.endsWith('"'))
-    ) {
-      return raw.slice(1, -1).trim();
-    }
-    return raw;
-  } catch {
-    return "";
-  }
-}
-
-async function loadWallet() {
-  const mnemonic = process.env.MNEMONIC?.trim() || loadMnemonicFromEnvFile();
-  if (mnemonic) {
-    return DirectSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "osmo" });
-  }
-  const privateKey = process.env.PRIVATE_KEY?.trim().replace(/^0x/i, "");
-  if (privateKey && /^[0-9a-fA-F]{64}$/.test(privateKey)) {
-    return DirectSecp256k1Wallet.fromKey(
-      Uint8Array.from(Buffer.from(privateKey, "hex")),
-      "osmo",
-    );
-  }
-  console.error("Set MNEMONIC in contracts/.env or MNEMONIC / PRIVATE_KEY env");
-  process.exit(1);
-}
 
 if (!CONTRACT) {
   console.error("Set CONTRACT=osmo1…");
@@ -136,7 +103,9 @@ async function partnerExists(denom) {
 async function rateMatches(denom, partnerAmount) {
   try {
     const rate = await query({ get_rate: { partner_denom: denom } });
-    return rate.base_amount === ONE_OSMO && rate.partner_amount === partnerAmount;
+    return (
+      rate.base_amount === ONE_OSMO && rate.partner_amount === partnerAmount
+    );
   } catch {
     return false;
   }
@@ -196,8 +165,8 @@ try {
     await exec(
       {
         swap: {
-          partner_denom: "gujarat-water-unit",
-          direction: { base_to_partner: {} },
+          partner_denom: "ibc/gujarat-water-unit",
+          direction: { base_to_partner: null },
           amount: demoMicro,
         },
       },

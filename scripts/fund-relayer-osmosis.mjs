@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { loadMnemonic } from "./load-mnemonic.mjs";
 
 const require = createRequire(
   resolve(dirname(fileURLToPath(import.meta.url)), "../../../www/package.json"),
@@ -20,16 +21,6 @@ const { coins } = require("@cosmjs/amino");
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const RPC = process.env.RPC ?? "https://rpc.osmotest5.osmosis.zone";
 const fee = { amount: [{ denom: "uosmo", amount: "80000" }], gas: "200000" };
-
-function loadMnemonic() {
-  const line = readFileSync(resolve(ROOT, ".env"), "utf8")
-    .split(/\r?\n/)
-    .find((row) => row.startsWith("MNEMONIC="));
-  if (!line) throw new Error("MNEMONIC missing in contracts/.env");
-  const raw = line.slice("MNEMONIC=".length).trim();
-  if (raw.startsWith("'") && raw.endsWith("'")) return raw.slice(1, -1);
-  return raw;
-}
 
 const relayer =
   process.env.RELAYER_ADDRESS?.trim() ??

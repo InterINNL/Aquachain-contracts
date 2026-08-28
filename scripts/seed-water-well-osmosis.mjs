@@ -8,6 +8,7 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { loadWallet } from "./load-wallet.mjs";
 
 const require = createRequire(
   resolve(dirname(fileURLToPath(import.meta.url)), "../../../www/package.json"),
@@ -20,32 +21,17 @@ const {
 } = require("@cosmjs/proto-signing");
 const { coins } = require("@cosmjs/amino");
 
-const RPC = process.env.RPC ?? "https://rpc.testnet.osmosis.zone";
+const RPC = process.env.RPC ?? "https://rpc.osmotest5.osmosis.zone";
 const DENOM = process.env.DENOM ?? "uosmo";
 const CONTRACT =
   process.env.CONTRACT ??
   "osmo1d3ulz45nqswlvrf7l4cj7ul5ky0pw7s3cqcdxnj63gpwkjuaszzsa2w9ta";
 
 const fee = {
-  amount: [{ denom: DENOM, amount: "500000" }],
+  amount: [{ denom: DENOM, amount: process.env.FEE_AMOUNT ?? "80000" }],
   gas: "1500000",
 };
 
-async function loadWallet() {
-  const mnemonic = process.env.MNEMONIC?.trim();
-  if (mnemonic) {
-    return DirectSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "osmo" });
-  }
-  const privateKey = process.env.PRIVATE_KEY?.trim().replace(/^0x/i, "");
-  if (privateKey && /^[0-9a-fA-F]{64}$/.test(privateKey)) {
-    return DirectSecp256k1Wallet.fromKey(
-      Uint8Array.from(Buffer.from(privateKey, "hex")),
-      "osmo",
-    );
-  }
-  console.error("Set MNEMONIC or PRIVATE_KEY");
-  process.exit(1);
-}
 
 const wallet = await loadWallet();
 const [account] = await wallet.getAccounts();
@@ -121,9 +107,9 @@ const demos = [
     label: "cancelled — admin cancel",
     goal: "750000",
     data: {
-      title: "Draft Site Survey — TBD",
-      location: "TBD",
-      description: "Placeholder proposal withdrawn before validation.",
+      title: "Salt lake survey — Sundarbans fringe",
+      location: "West Bengal, India",
+      description: "Withdrawn after mangrove protection review in Kolkata region.",
     },
     after: "cancelled",
   },

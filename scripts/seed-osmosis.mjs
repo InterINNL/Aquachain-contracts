@@ -8,6 +8,7 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { loadWallet } from "./load-wallet.mjs";
 
 const require = createRequire(
   resolve(dirname(fileURLToPath(import.meta.url)), "../../../www/package.json"),
@@ -20,32 +21,17 @@ const {
 } = require("@cosmjs/proto-signing");
 const { coins } = require("@cosmjs/amino");
 
-const RPC = process.env.RPC ?? "https://rpc.testnet.osmosis.zone";
+const RPC = process.env.RPC ?? "https://rpc.osmotest5.osmosis.zone";
 const DENOM = process.env.DENOM ?? "uosmo";
 const CONTRACT =
   process.env.CONTRACT ??
   "osmo1nqqev3y5l8sjgrghuplagy0td3tdcy0cklx9mqnze27j2ynu7jrqram74j";
 
 const fee = {
-  amount: [{ denom: DENOM, amount: "500000" }],
+  amount: [{ denom: DENOM, amount: process.env.FEE_AMOUNT ?? "80000" }],
   gas: "1500000",
 };
 
-async function loadWallet() {
-  const mnemonic = process.env.MNEMONIC?.trim();
-  if (mnemonic) {
-    return DirectSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "osmo" });
-  }
-  const privateKey = process.env.PRIVATE_KEY?.trim().replace(/^0x/i, "");
-  if (privateKey && /^[0-9a-fA-F]{64}$/.test(privateKey)) {
-    return DirectSecp256k1Wallet.fromKey(
-      Uint8Array.from(Buffer.from(privateKey, "hex")),
-      "osmo",
-    );
-  }
-  console.error("Set MNEMONIC or PRIVATE_KEY");
-  process.exit(1);
-}
 
 const wallet = await loadWallet();
 const [account] = await wallet.getAccounts();
@@ -78,18 +64,75 @@ try {
 const sensors = [
   {
     type: "Water Quality",
-    model: "demo-yamuna-up",
-    location: { lat: "28.61", lng: "77.23", description: "Yamuna upstream — Delhi" },
+    model: "yamuna-wazirabad",
+    location: {
+      lat: "28.70",
+      lng: "77.22",
+      description: "Yamuna Wazirabad barrage, Delhi NCR, India",
+    },
   },
   {
     type: "Water Quality",
-    model: "demo-yamuna-down",
-    location: { lat: "28.58", lng: "77.26", description: "Yamuna downstream — Okhla" },
+    model: "sabarmati-ahmedabad",
+    location: {
+      lat: "23.02",
+      lng: "72.57",
+      description: "Sabarmati riverfront, Ahmedabad, Gujarat, India",
+    },
   },
   {
     type: "Water Level",
-    model: "demo-lake-pichola",
-    location: { lat: "24.57", lng: "73.68", description: "Lake Pichola — Udaipur" },
+    model: "lake-pichola-udaipur",
+    location: {
+      lat: "24.57",
+      lng: "73.68",
+      description: "Lake Pichola level gauge, Udaipur, Rajasthan, India",
+    },
+  },
+  {
+    type: "Water pH",
+    model: "adyar-chennai",
+    location: {
+      lat: "13.00",
+      lng: "80.25",
+      description: "Adyar estuary, Chennai, Tamil Nadu, India",
+    },
+  },
+  {
+    type: "Water Turbidity",
+    model: "hooghly-kolkata",
+    location: {
+      lat: "22.57",
+      lng: "88.36",
+      description: "Hooghly river monitoring, Kolkata, West Bengal, India",
+    },
+  },
+  {
+    type: "Water Temperature",
+    model: "periyar-kochi",
+    location: {
+      lat: "9.97",
+      lng: "76.28",
+      description: "Periyar backwater inlet, Kochi, Kerala, India",
+    },
+  },
+  {
+    type: "Water Quantity",
+    model: "krishna-vijayawada",
+    location: {
+      lat: "16.52",
+      lng: "80.63",
+      description: "Krishna river flow, Vijayawada, Andhra Pradesh, India",
+    },
+  },
+  {
+    type: "Water Quality",
+    model: "mula-mutha-pune",
+    location: {
+      lat: "18.52",
+      lng: "73.86",
+      description: "Mula-Mutha confluence, Pune, Maharashtra, India",
+    },
   },
 ];
 
