@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const require = createRequire(
-  resolve(dirname(fileURLToPath(import.meta.url)), "../../www/package.json"),
+  resolve(dirname(fileURLToPath(import.meta.url)), "../../../www/package.json"),
 );
 
 const { SigningCosmWasmClient } = require("@cosmjs/cosmwasm-stargate");
@@ -76,11 +76,11 @@ try {
 
 const companies = [
   {
-    name: "Seine Métropole Water",
+    name: "Delhi Jal Board",
     metadata: {
       sector: "municipal utility",
-      region: "Île-de-France",
-      notes: "Demo utility for AquaChain MVP",
+      region: "Delhi, India",
+      notes: "Demo utility for AquaChain footprint module",
     },
     logs: [
       { period: "2026-Q1", usage: "1000000", savings: "150000" },
@@ -90,10 +90,10 @@ const companies = [
     certify: "2026-Q1",
   },
   {
-    name: "Coastal Desal Co",
+    name: "BWSSB Bengaluru",
     metadata: {
-      sector: "desalination",
-      region: "Mediterranean",
+      sector: "municipal utility",
+      region: "Karnataka, India",
       notes: "Pending validation demo",
     },
     logs: [{ period: "2026-H1", usage: "500000", savings: "80000" }],

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const require = createRequire(
-  resolve(dirname(fileURLToPath(import.meta.url)), "../../www/package.json"),
+  resolve(dirname(fileURLToPath(import.meta.url)), "../../../www/package.json"),
 );
 
 const { SigningCosmWasmClient } = require("@cosmjs/cosmwasm-stargate");
@@ -78,18 +78,18 @@ try {
 const sensors = [
   {
     type: "Water Quality",
-    model: "demo-seine-up",
-    location: { lat: "48.86", lng: "2.35", description: "Seine Upstream" },
+    model: "demo-yamuna-up",
+    location: { lat: "28.61", lng: "77.23", description: "Yamuna upstream — Delhi" },
   },
   {
     type: "Water Quality",
-    model: "demo-seine-down",
-    location: { lat: "48.84", lng: "2.37", description: "Seine Downstream" },
+    model: "demo-yamuna-down",
+    location: { lat: "28.58", lng: "77.26", description: "Yamuna downstream — Okhla" },
   },
   {
     type: "Water Level",
-    model: "demo-well-alpha",
-    location: { lat: "48.87", lng: "2.33", description: "Well Alpha" },
+    model: "demo-lake-pichola",
+    location: { lat: "24.57", lng: "73.68", description: "Lake Pichola — Udaipur" },
   },
 ];
 

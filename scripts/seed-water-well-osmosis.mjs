@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const require = createRequire(
-  resolve(dirname(fileURLToPath(import.meta.url)), "../../www/package.json"),
+  resolve(dirname(fileURLToPath(import.meta.url)), "../../../www/package.json"),
 );
 
 const { SigningCosmWasmClient } = require("@cosmjs/cosmwasm-stargate");
@@ -78,10 +78,10 @@ const demos = [
     label: "proposed — leave pending",
     goal: "2500000",
     data: {
-      title: "Village Handpump — Kisumu",
-      location: "Kisumu County, Kenya",
+      title: "Village handpump — Udaipur district",
+      location: "Rajasthan, India",
       description:
-        "Replace a failed handpump serving ~400 residents near Lake Victoria.",
+        "Replace a failed handpump serving a rural hamlet outside Udaipur.",
     },
     after: "proposed",
   },
@@ -89,10 +89,10 @@ const demos = [
     label: "fundraising — partial donate",
     goal: "1000000",
     data: {
-      title: "Community Borehole — Saint-Louis",
-      location: "Saint-Louis, Senegal",
+      title: "School borehole — Bengaluru outskirts",
+      location: "Karnataka, India",
       description:
-        "Drill and equip a solar borehole for a riverside school district.",
+        "Drill and equip a solar borehole for a peri-urban school block.",
     },
     after: "partial",
     donate: "350000",
@@ -101,9 +101,9 @@ const demos = [
     label: "disbursable — fully funded + unlock",
     goal: "500000",
     data: {
-      title: "Solar Water Point — Niamey outskirts",
-      location: "Niamey, Niger",
-      description: "Install a solar pump and storage tank for a peri-urban clinic.",
+      title: "Solar pump — Nashik farm cooperative",
+      location: "Maharashtra, India",
+      description: "Install a solar pump and storage tank for a farm cooperative.",
     },
     after: "disbursable",
   },
@@ -111,8 +111,8 @@ const demos = [
     label: "completed — fund unlock disburse",
     goal: "200000",
     data: {
-      title: "School Well Rehab — Bamako",
-      location: "Bamako, Mali",
+      title: "Community well rehab — Gujarat",
+      location: "Gujarat, India",
       description: "Rehabilitate an existing well and add a child-safe apron.",
     },
     after: "completed",
