@@ -38,6 +38,15 @@ pub enum ContractError {
 
     #[error("Verifier already exists")]
     VerifierAlreadyExists,
+
+    #[error("Agent already registered for this operator")]
+    AgentAlreadyExists,
+
+    #[error("Agent name is required")]
+    InvalidAgentName,
+
+    #[error("Agent policy JSON is invalid")]
+    InvalidAgentPolicy,
 }
 
 impl From<ContractError> for StdError {

@@ -1651,4 +1651,38 @@ mod tests {
         let res = contract.is_verifier(unknown.clone()).unwrap();
         assert!(!res, "Unknown address should not be a verifier");
     }
+
+    #[test]
+    fn integration_register_agent_and_list() {
+        use crate::agent_registry::AgentType;
+        use crate::contract::sv::mt::CitizenScienceRegistryProxy;
+
+        let app = App::default();
+        let code_id = CodeId::store_code(&app);
+        let admin = "admin".into_addr();
+        let operator = "drone_operator".into_addr();
+        let contract = code_id
+            .instantiate(Some(DEFAULT_DENOM.to_string()))
+            .call(&admin)
+            .unwrap();
+
+        contract
+            .register_agent(
+                "YamunaDrone-1".to_string(),
+                AgentType::Drone,
+                operator.clone(),
+                "demo-pubkey".to_string(),
+                serde_json::json!({
+                    "site": "Yamuna, Delhi, India",
+                    "max_turbidity_ntu": "25"
+                }),
+            )
+            .call(&admin)
+            .unwrap();
+
+        assert!(contract.is_agent(operator.clone()).unwrap());
+        let agents = contract.list_agents(None, None).unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].name, "YamunaDrone-1");
+    }
 }

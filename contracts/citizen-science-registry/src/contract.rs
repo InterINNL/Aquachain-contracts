@@ -1,6 +1,9 @@
+use crate::agent_registry::{
+    serialize_policy, validate_agent_name, validate_pubkey, Agent, AgentType,
+};
 use crate::constants::{
-    ADMIN, DATA_ENTRIES, DATA_HASHES, DEFAULT_DENOM, DENOM, NEXT_ENTRY_ID, NEXT_SENSOR_ID,
-    SENSOR_HASHES, SENSORS, VERIFIERS,
+    ADMIN, AGENT_BY_OPERATOR, AGENTS, DATA_ENTRIES, DATA_HASHES, DEFAULT_DENOM, DENOM,
+    NEXT_AGENT_ID, NEXT_ENTRY_ID, NEXT_SENSOR_ID, SENSOR_HASHES, SENSORS, VERIFIERS,
 };
 use crate::enums::SensorStatus;
 use crate::errors::ContractError;
@@ -52,6 +55,7 @@ impl CitizenScienceRegistry {
         ADMIN.save(ctx.deps.storage, &ctx.info.sender)?;
         NEXT_SENSOR_ID.save(ctx.deps.storage, &1)?;
         NEXT_ENTRY_ID.save(ctx.deps.storage, &1)?;
+        NEXT_AGENT_ID.save(ctx.deps.storage, &1)?;
 
         let denom_to_store = denom.unwrap_or_else(|| DEFAULT_DENOM.to_string());
         DENOM.save(ctx.deps.storage, &denom_to_store)?;
@@ -195,6 +199,56 @@ impl CitizenScienceRegistry {
         Ok(Response::new()
             .add_attribute("action", "add_verifier")
             .add_attribute("verifier", verifier.to_string()))
+    }
+
+    #[sv::msg(exec)]
+    fn register_agent(
+        &self,
+        ctx: ExecCtx,
+        name: String,
+        agent_type: AgentType,
+        operator: Addr,
+        pubkey: String,
+        policy: Value,
+    ) -> StdResult<Response> {
+        let admin = ADMIN.load(ctx.deps.storage)?;
+        if ctx.info.sender != admin {
+            return Err(ContractError::Unauthorized.into());
+        }
+        if !validate_agent_name(&name) || !validate_pubkey(&pubkey) {
+            return Err(ContractError::InvalidAgentName.into());
+        }
+        if AGENT_BY_OPERATOR
+            .may_load(ctx.deps.storage, operator.clone())?
+            .is_some()
+        {
+            return Err(ContractError::AgentAlreadyExists.into());
+        }
+
+        let policy_json =
+            serialize_policy(&policy).map_err(|_| ContractError::InvalidAgentPolicy)?;
+
+        let id = NEXT_AGENT_ID.load(ctx.deps.storage)?;
+        let agent = Agent {
+            id,
+            name: name.trim().to_string(),
+            agent_type: agent_type.clone(),
+            operator: operator.clone(),
+            pubkey: pubkey.trim().to_string(),
+            policy_json,
+            registered_at: ctx.env.block.time.seconds(),
+        };
+
+        AGENTS.save(ctx.deps.storage, id, &agent)?;
+        AGENT_BY_OPERATOR.save(ctx.deps.storage, operator.clone(), &id)?;
+        NEXT_AGENT_ID.save(ctx.deps.storage, &(id + 1))?;
+
+        Ok(Response::new()
+            .add_attribute("action", "register_agent")
+            .add_attribute("agent_id", id.to_string())
+            .add_attribute("name", agent.name.clone())
+            .add_attribute("agent_type", format!("{agent_type:?}"))
+            .add_attribute("operator", operator.to_string()))
     }
 
     #[sv::msg(exec)]
@@ -500,6 +554,35 @@ impl CitizenScienceRegistry {
         Ok(VERIFIERS
             .may_load(ctx.deps.storage, verifier)?
             .unwrap_or(false))
+    }
+
+    #[sv::msg(query)]
+    fn is_agent(&self, ctx: QueryCtx, operator: Addr) -> StdResult<bool> {
+        Ok(AGENT_BY_OPERATOR
+            .may_load(ctx.deps.storage, operator)?
+            .is_some())
+    }
+
+    #[sv::msg(query)]
+    fn get_agent(&self, ctx: QueryCtx, agent_id: u64) -> StdResult<Agent> {
+        AGENTS.load(ctx.deps.storage, agent_id)
+    }
+
+    #[sv::msg(query)]
+    fn list_agents(
+        &self,
+        ctx: QueryCtx,
+        limit: Option<u32>,
+        start_after: Option<u64>,
+    ) -> StdResult<Vec<Agent>> {
+        let limit = limit.unwrap_or(10).min(30) as usize;
+        let start = start_after.map(Bound::exclusive);
+
+        AGENTS
+            .range(ctx.deps.storage, start, None, Order::Ascending)
+            .take(limit)
+            .map(|item| item.map(|(_, agent)| agent))
+            .collect()
     }
 }
 

@@ -1,3 +1,4 @@
+mod agent_registry;
 mod constants;
 pub mod contract;
 mod enums;
