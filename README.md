@@ -10,6 +10,7 @@ CosmWasm (Sylvia) smart contracts for AquaChain water-management demos.
 | **sustainable-action-rewards** | `sustainable_action_rewards` | Community eco actions, verify, reward impact |
 | **community-bounty** | `community_bounty` | Escrowed sustainability tasks, submissions, payout |
 | **water-credit-marketplace** | `water_credit_marketplace` | Internal conservation credit ledger and marketplace |
+| **local-dao** | `local_dao` | Community proposals, voting, and on-chain finalization |
 
 Frontend: [InterINNL/Aquachain-frontend](https://github.com/InterINNL/Aquachain-frontend)
 
@@ -88,10 +89,11 @@ Build each crate first (`make build`), then from the contracts repo root:
 | 4     | `LABEL=sustainable-action-rewards` | `…/sustainable_action_rewards.wasm`                                 | `SustainableActionRewardsContractAddress` |
 | 5     | `LABEL=community-bounty` | `…/community_bounty.wasm` | `CommunityBountyContractAddress` |
 | 6     | `LABEL=water-credit-marketplace` | `…/water_credit_marketplace.wasm` | `WaterCreditMarketplaceContractAddress` |
+| 7     | `LABEL=local-dao` | `…/local_dao.wasm` | `LocalDaoContractAddress` |
 
 ```sh
-LABEL=water-credit-marketplace node scripts/deploy-osmosis.mjs \
-  target/wasm32-unknown-unknown/release/water_credit_marketplace.wasm
+LABEL=local-dao INSTANTIATE_MSG='{"quorum_bps":3000,"voting_period_seconds":604800}' \
+  node scripts/deploy-osmosis.mjs target/wasm32-unknown-unknown/release/local_dao.wasm
 ```
 
 Paste each printed `contract` address into frontend `environment.prod.ts` (live) or `environment.ts` (local).
@@ -106,11 +108,12 @@ Optional demo seeds (same auth env vars; optional `CONTRACT=osmo1…`):
 | `scripts/seed-sustainable-actions-osmosis.mjs` | Sustainable Actions |
 | `scripts/seed-community-bounty-osmosis.mjs` | Community Bounty |
 | `scripts/seed-water-credits-osmosis.mjs` | Water Credits |
+| `scripts/seed-local-dao-osmosis.mjs` | Local DAO |
 
-## Demo checklist (six modules)
+## Demo checklist (seven modules)
 
-1. Deploy all six contracts (local wasmd **or** Osmosis as above).
-2. Set the six env keys in the frontend build that reviewers will open.
+1. Deploy all seven contracts (local wasmd **or** Osmosis as above).
+2. Set the seven env keys in the frontend build that reviewers will open.
 3. Connect Keplr to the matching chain; fund the account.
 4. Smoke each path:
    - **Citizen Science:** register sensor → activate → submit data → verify → reward
@@ -119,6 +122,7 @@ Optional demo seeds (same auth env vars; optional `CONTRACT=osmo1…`):
    - **Sustainable Actions:** submit action → verify → reward with funds
    - **Community Bounty:** post bounty with escrow → submit work → approve winner (payout)
    - **Water Credits:** mint credits → list for sale → buy listing (atomic pay + transfer)
+   - **Local DAO:** create proposal → vote → execute after voting period (quorum + yes majority)
 
 Demo geography: use **Indian cities and regions** in seed scripts and UI examples (Delhi, Bengaluru, Udaipur, Mumbai, Gujarat, etc.).
 

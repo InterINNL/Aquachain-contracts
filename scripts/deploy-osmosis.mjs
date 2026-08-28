@@ -81,7 +81,9 @@ console.log(`codeId  ${upload.codeId}`);
 console.log(`tx      ${upload.transactionHash}`);
 
 console.log("Instantiating…");
-const initMsg = { denom: DENOM };
+const initMsg = process.env.INSTANTIATE_MSG
+  ? JSON.parse(process.env.INSTANTIATE_MSG)
+  : { denom: DENOM };
 const inst = await client.instantiate(
   account.address,
   upload.codeId,

@@ -6,6 +6,7 @@ members = [
   "contracts/sustainable-action-rewards",
   "contracts/community-bounty",
   "contracts/water-credit-marketplace",
+  "contracts/local-dao",
 ]
 resolver = "3"
 
