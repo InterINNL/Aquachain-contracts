@@ -298,10 +298,7 @@ fn normalize_partner_denom(denom: &str) -> StdResult<String> {
     Ok(trimmed.to_string())
 }
 
-fn load_active_partner(
-    storage: &dyn sylvia::cw_std::Storage,
-    key: &str,
-) -> StdResult<PartnerInfo> {
+fn load_active_partner(storage: &dyn sylvia::cw_std::Storage, key: &str) -> StdResult<PartnerInfo> {
     let partner = PARTNERS
         .load(storage, key.to_string())
         .map_err(|_| ContractError::PartnerNotFound)?;

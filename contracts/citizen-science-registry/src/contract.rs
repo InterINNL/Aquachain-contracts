@@ -1,5 +1,5 @@
 use crate::agent_registry::{
-    serialize_policy, validate_agent_name, validate_pubkey, Agent, AgentType,
+    Agent, AgentType, serialize_policy, validate_agent_name, validate_pubkey,
 };
 use crate::constants::{
     ADMIN, AGENT_BY_OPERATOR, AGENTS, DATA_ENTRIES, DATA_HASHES, DEFAULT_DENOM, DENOM,

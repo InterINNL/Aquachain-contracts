@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod tests {
     use crate::constants::DEFAULT_DENOM;
+    use crate::contract::SwapDirection;
     use crate::contract::sv::mt::CodeId;
     use crate::contract::sv::mt::CrossPlatformExchangeContractProxy;
-    use crate::contract::SwapDirection;
     use crate::errors::ContractError;
     use sylvia::cw_multi_test::{App as MtApp, BankSudo, IntoAddr, SudoMsg};
     use sylvia::cw_std::{Uint128, coin};
@@ -274,9 +274,7 @@ mod tests {
         assert_eq!(partners.len(), 1);
         assert_eq!(partners[0].region, "Nashik, Maharashtra, India");
 
-        let rate = contract
-            .get_rate("nashik-aqua-unit".to_string())
-            .unwrap();
+        let rate = contract.get_rate("nashik-aqua-unit".to_string()).unwrap();
         assert_eq!(rate.base_amount, Uint128::new(1000));
         assert_eq!(rate.partner_amount, Uint128::new(25));
     }

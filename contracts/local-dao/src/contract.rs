@@ -9,7 +9,7 @@ use crate::constants::{
 use crate::errors::ContractError;
 use cosmwasm_schema::cw_serde;
 use cw_storage_plus::Bound;
-use serde_json::{to_string, Value};
+use serde_json::{Value, to_string};
 use sylvia::contract;
 use sylvia::ctx::{ExecCtx, InstantiateCtx, QueryCtx};
 use sylvia::cw_std::{Addr, CosmosMsg, Order, Response, StdResult};
