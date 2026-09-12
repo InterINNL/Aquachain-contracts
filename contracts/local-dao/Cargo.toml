@@ -3,6 +3,7 @@ name = "local-dao"
 authors = ["gRoussac <gRoussac@users.noreply.github.com>"]
 version = "0.1.0"
 edition = "2024"
+license = { workspace = true }
 
 [features]
 library = []
@@ -10,6 +11,7 @@ library = []
 [[bin]]
 name = "schema"
 path = "src/bin/schema.rs"
+doc = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
