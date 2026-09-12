@@ -25,7 +25,7 @@ test:
 	$(CARGO) test --workspace
 
 doc:
-	RUSTDOCFLAGS='-D warnings' $(CARGO) doc --workspace --no-deps
+	RUSTDOCFLAGS='-D warnings' $(CARGO) doc --workspace --no-deps --lib
 
 coverage:
 	mkdir -p coverage

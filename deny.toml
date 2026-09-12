@@ -6,6 +6,8 @@ all-features = false
 
 [advisories]
 yanked = "warn"
+# CosmWasm pulls unmaintained transitive crates (derivative, paste, …).
+unmaintained = "workspace"
 
 [licenses]
 unused-allowed-license = "allow"

@@ -1,6 +1,5 @@
 /target
 **/schema/
-Cargo.lock
 .env
 *.swp
 .idea/
