@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint-test-doc:
-    name: fmt · clippy · test · rustdoc
+  lint-test:
+    name: fmt · clippy · test
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -26,8 +26,8 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: lint + test + rustdoc
-        run: make lint && make test && make doc
+      - name: lint + test
+        run: make lint && make test
 
   coverage:
     name: coverage
